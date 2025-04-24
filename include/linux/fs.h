@@ -2,7 +2,6 @@
 #ifndef _LINUX_FS_H
 #define _LINUX_FS_H
 
-#include "linux/proc_fs.h"
 #include <linux/linkage.h>
 #include <linux/wait_bit.h>
 #include <linux/kdev_t.h>
