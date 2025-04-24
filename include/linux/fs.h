@@ -2,6 +2,7 @@
 #ifndef _LINUX_FS_H
 #define _LINUX_FS_H
 
+#include "linux/proc_fs.h"
 #include <linux/linkage.h>
 #include <linux/wait_bit.h>
 #include <linux/kdev_t.h>
@@ -639,6 +640,11 @@ struct fsnotify_mark_connector;
  * of the 'struct inode'
  */
 struct inode {
+	/*
+	权限UGO各占3bit, 共9bit
+	特殊权限, SUID SGID SVTX 共3bit
+	最高位4bit可用于表示文件类型
+	*/
 	umode_t			i_mode;
 	unsigned short		i_opflags;
 	kuid_t			i_uid;
@@ -1190,7 +1196,7 @@ struct sb_writers {
 struct super_block {
 	struct list_head	s_list;		/* Keep this first */
 	dev_t			s_dev;		/* search index; _not_ kdev_t */
-	unsigned char		s_blocksize_bits;
+	unsigned char		s_blocksize_bits; // 性能考虑, 便于计算
 	unsigned long		s_blocksize;
 	loff_t			s_maxbytes;	/* Max file size */
 	struct file_system_type	*s_type;
@@ -1198,9 +1204,12 @@ struct super_block {
 	const struct dquot_operations	*dq_op;
 	const struct quotactl_ops	*s_qcop;
 	const struct export_operations *s_export_op;
+	// 用户可见的标志, 例如MS_RDONLY, MSNOSUID等
 	unsigned long		s_flags;
+	// 内核控制相关的, 例如clean, dirty, mounting, blocked等
 	unsigned long		s_iflags;	/* internal SB_I_* flags */
 	unsigned long		s_magic;
+	// 内核加载sb时, 会默认加载 s_root, 便于后续操作
 	struct dentry		*s_root;
 	struct rw_semaphore	s_umount;
 	int			s_count;
@@ -1220,13 +1229,19 @@ struct super_block {
 	struct unicode_map *s_encoding;
 	__u16 s_encoding_flags;
 #endif
+	// 哈希链表, 双向链表, 专门用于桶内存储
 	struct hlist_bl_head	s_roots;	/* alternate root dentries for NFS */
 	struct list_head	s_mounts;	/* list of mounts; _not_ for fs use */
+	// 具体的存储块设备
 	struct block_device	*s_bdev;
+	// TODO 为什么这里handle的成员中又一个 s_bdev
 	struct bdev_handle	*s_bdev_handle;
 	struct backing_dev_info *s_bdi;
+	// memory technology device, 闪存设备相关
 	struct mtd_info		*s_mtd;
+	// 内核中所有的super block 都会挂在 s_instances上面
 	struct hlist_node	s_instances;
+	// 配额有多种类型 user group project等
 	unsigned int		s_quota_types;	/* Bitmask of supported quota types */
 	struct quota_info	s_dquot;	/* Diskquota specific options */
 
@@ -1249,6 +1264,7 @@ struct super_block {
 	struct fsnotify_mark_connector __rcu	*s_fsnotify_marks;
 #endif
 
+	// 例如ext2, ext4等
 	char			s_id[32];	/* Informational name */
 	uuid_t			s_uuid;		/* UUID */
 
@@ -1264,13 +1280,16 @@ struct super_block {
 	 * Filesystem subtype.  If non-empty the filesystem type field
 	 * in /proc/mounts will be "type.subtype"
 	 */
+	/* 有些文件系统会有子类型, 例如 ext4.encrypted xfs.debug xfs.encrypted zfuse.zfsv3*/
 	const char *s_subtype;
 
 	const struct dentry_operations *s_d_op; /* default d_op for dentries */
 
+	// 释放内存, 内存压力较大时会释放一部分
 	struct shrinker s_shrink;	/* per-sb shrinker handle */
 
-	/* Number of inodes with nlink == 0 but still referenced */
+	/* Number of inodes with nlink == 0 but still referenced 
+	例如删除了, 但是被打开还没关闭 */
 	atomic_long_t s_remove_count;
 
 	/*
@@ -2062,9 +2081,12 @@ struct super_operations {
    	void (*dirty_inode) (struct inode *, int flags);
 	int (*write_inode) (struct inode *, struct writeback_control *wbc);
 	int (*drop_inode) (struct inode *);
+	// 从内存中安全移除不再使用的inode, 用于释放资源
 	void (*evict_inode) (struct inode *);
 	void (*put_super) (struct super_block *);
 	int (*sync_fs)(struct super_block *sb, int wait);
+	/* freeze和thaw是一对操作, 冻结和解冻, 用于临时暂停对文件系统的修改
+	例如 创建快照, 系统休眠, 系统备份等 */
 	int (*freeze_super) (struct super_block *, enum freeze_holder who);
 	int (*freeze_fs) (struct super_block *);
 	int (*thaw_super) (struct super_block *, enum freeze_holder who);
@@ -2073,6 +2095,14 @@ struct super_operations {
 	int (*remount_fs) (struct super_block *, int *, char *);
 	void (*umount_begin) (struct super_block *);
 
+	/* 		
+		用于和系统的工具配合使用, 例如:
+		/proc/mounts
+		mount -v
+		findmnt
+		/proc/self/mountinfo
+		/proc/fs/<fstype>/stats
+		 */
 	int (*show_options)(struct seq_file *, struct dentry *);
 	int (*show_devname)(struct seq_file *, struct dentry *);
 	int (*show_path)(struct seq_file *, struct dentry *);
