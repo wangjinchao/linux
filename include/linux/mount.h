@@ -70,6 +70,7 @@ struct path;
 struct vfsmount {
 	struct dentry *mnt_root;	/* root of the mounted tree */
 	struct super_block *mnt_sb;	/* pointer to superblock */
+	// MNT_NOSUID MNT_NODEV MNT_NOEXEC
 	int mnt_flags;
 	struct mnt_idmap *mnt_idmap;
 } __randomize_layout;
