@@ -1,0 +1,38 @@
+# 文件位置：Linux 内核源码根目录/.clangd
+CompileFlags:
+  # 移除 Clang 不支持的 GCC 参数（覆盖常见内核编译选项）
+  Remove:
+    - -fconserve-stack
+    - -mpreferred-stack-boundary=3
+    - -mindirect-branch=thunk-extern
+    - -mindirect-branch-register
+    - -fno-allow-store-data-races
+    - -mabi=lp64
+    - -fno-var-tracking-assignments
+    - -fno-strict-overflow
+    - -fno-omit-frame-pointer
+    - -fno-unit-at-a-time
+
+  # 全局忽略参数相关警告
+  Add:
+    - -Wno-unknown-warning-option       # 忽略未知编译选项警告
+    - -Wno-unused-command-line-argument # 忽略未使用的参数警告
+    - -Wno-gnu-variable-sized-type-not-at-end  # 忽略柔性数组位置警告
+
+Diagnostics:
+  ClangTidy:
+    CheckOptions:  # 字典格式（无列表符号）
+      modernize-use-trailing-return-type.DiagnosticMode: false
+      bugprone-sizeof-expression.WarnOnSizeOfPointerToAggregate: false
+      # readability-magic-numbers.IgnoredNumbers: [0, 1, 2, 4, 8, 16, 32, 64]
+
+
+# 内核专用优化参数
+---
+If:
+  PathMatch: .*\.c$|.*\.h$|.*\.S$        # 仅对 C/汇编文件生效
+CompileFlags:
+  Add:
+    - -nostdinc                          # 避免标准头文件干扰
+    - -Iinclude                          # 内核头文件路径（根据实际路径调整）
+    - -D__KERNEL__                       # 强制启用内核宏定义
