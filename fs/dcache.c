@@ -78,6 +78,7 @@ __cacheline_aligned_in_smp DEFINE_SEQLOCK(rename_lock);
 
 EXPORT_SYMBOL(rename_lock);
 
+// dcache 声明
 static struct kmem_cache *dentry_cache __read_mostly;
 
 const struct qstr empty_name = QSTR_INIT("", 0);

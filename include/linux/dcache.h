@@ -81,13 +81,18 @@ extern const struct qstr dotdot_name;
 
 struct dentry {
 	/* RCU lookup touched fields */
+	// 修改, 缓存, 同步等状态
 	unsigned int d_flags;		/* protected by d_lock */
 	seqcount_spinlock_t d_seq;	/* per dentry seqlock */
 	struct hlist_bl_node d_hash;	/* lookup hash list */
+	// 根目录的d_parent 指向自己
 	struct dentry *d_parent;	/* parent directory */
+	// 只会保存当前dentry的name, 全局需要从根开始逐个查找
 	struct qstr d_name;
+	// 因为有对inode的引用, 所以dcache实际上也把inode cache了
 	struct inode *d_inode;		/* Where the name belongs to - NULL is
 					 * negative */
+	// 短名字时使用, 防止反复动态申请内存
 	unsigned char d_iname[DNAME_INLINE_LEN];	/* small names */
 
 	/* Ref lookup also touches following */
@@ -126,7 +131,9 @@ enum dentry_d_lock_class
 };
 
 struct dentry_operations {
+	// 大部分文件系统会设置为null指针, 代表dentry一直生效
 	int (*d_revalidate)(struct dentry *, unsigned int);
+	// 网络文件系统会设置成支持最终一致性的弱验证, 弱验证中必要情况下可以调用强验证
 	int (*d_weak_revalidate)(struct dentry *, unsigned int);
 	int (*d_hash)(const struct dentry *, struct qstr *);
 	int (*d_compare)(const struct dentry *,
