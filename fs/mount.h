@@ -5,6 +5,7 @@
 #include <linux/ns_common.h>
 #include <linux/fs_pin.h>
 
+// 默认所有进程同一个namespace
 struct mnt_namespace {
 	struct ns_common	ns;
 	struct mount *	root;

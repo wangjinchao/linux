@@ -6,11 +6,13 @@
 #include <linux/spinlock.h>
 #include <linux/seqlock.h>
 
+// root pwd 
 struct fs_struct {
 	int users;
 	spinlock_t lock;
 	seqcount_spinlock_t seq;
 	int umask;
+	// 标志程序处于进程切换的中间状态
 	int in_exec;
 	struct path root, pwd;
 } __randomize_layout;

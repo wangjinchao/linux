@@ -45,6 +45,7 @@ static inline bool fd_is_open(unsigned int fd, const struct fdtable *fdt)
 /*
  * Open file table structure
  */
+// 单个进程打开的文件描述符映射
 struct files_struct {
   /*
    * read mostly part
@@ -54,12 +55,14 @@ struct files_struct {
 	wait_queue_head_t resize_wait;
 
 	struct fdtable __rcu *fdt;
+	// 打开的文件fd 
 	struct fdtable fdtab;
   /*
    * written part on a separate cache line in SMP
    */
 	spinlock_t file_lock ____cacheline_aligned_in_smp;
 	unsigned int next_fd;
+	// 防止文件描述符泄露到新进程中
 	unsigned long close_on_exec_init[1];
 	unsigned long open_fds_init[1];
 	unsigned long full_fds_bits_init[1];

@@ -1096,6 +1096,7 @@ struct task_struct {
 	struct fs_struct		*fs;
 
 	/* Open file information: */
+	// 从这里于文件进行关联
 	struct files_struct		*files;
 
 #ifdef CONFIG_IO_URING
