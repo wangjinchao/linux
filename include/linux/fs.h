@@ -469,6 +469,7 @@ extern const struct address_space_operations empty_aops;
  * @private_list: For use by the owner of the address_space.
  * @private_data: For use by the owner of the address_space.
  */
+// 除了文件系统会用到, 进程管理也会用到
 struct address_space {
 	struct inode		*host;
 	struct xarray		i_pages;
@@ -645,10 +646,12 @@ struct inode {
 	最高位4bit可用于表示文件类型
 	*/
 	umode_t			i_mode;
+	// inode 所支持的操作
 	unsigned short		i_opflags;
 	kuid_t			i_uid;
 	struct list_head	i_lru;		/* inode LRU list */
 	kgid_t			i_gid;
+	// inode 所处的状态
 	unsigned int		i_flags;
 
 #ifdef CONFIG_FS_POSIX_ACL
@@ -678,14 +681,17 @@ struct inode {
 		unsigned int __i_nlink;
 	};
 	dev_t			i_rdev;
+	// long offset type
 	loff_t			i_size;
 	struct timespec64	i_atime;
 	struct timespec64	i_mtime;
 	struct timespec64	__i_ctime; /* use inode_*_ctime accessors! */
 	spinlock_t		i_lock;	/* i_blocks, i_bytes, maybe i_size */
+	// 最后一个非整blk的长度
 	unsigned short          i_bytes;
 	u8			i_blkbits;
 	u8			i_write_hint;
+	// 这里实际上代表的是 sectors, 以512字节为单位
 	blkcnt_t		i_blocks;
 
 #ifdef __NEED_I_SIZE_ORDERED
@@ -715,6 +721,8 @@ struct inode {
 		struct hlist_head	i_dentry;
 		struct rcu_head		i_rcu;
 	};
+
+	// 用于区分inode 元数据的版本, 防止cache使用了旧版本
 	atomic64_t		i_version;
 	atomic64_t		i_sequence; /* see futex */
 	atomic_t		i_count;
@@ -737,6 +745,7 @@ struct inode {
 		unsigned		i_dir_seq;
 	};
 
+	// 有时候同一个inode会代表不同的文件, 加上 i_generation用于区分
 	__u32			i_generation;
 
 #ifdef CONFIG_FSNOTIFY
@@ -2115,6 +2124,7 @@ struct super_operations {
 				  struct shrink_control *);
 	long (*free_cached_objects)(struct super_block *,
 				    struct shrink_control *);
+	// 在umount或者关机前触发调用
 	void (*shutdown)(struct super_block *sb);
 };
 
