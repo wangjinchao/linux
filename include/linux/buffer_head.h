@@ -66,8 +66,10 @@ struct buffer_head {
 
 	sector_t b_blocknr;		/* start block number */
 	size_t b_size;			/* size of mapping */
+	// 内存中的位置
 	char *b_data;			/* pointer to data within the page */
 
+	// 于 b_blocknr 配合确定当前bh对应的block位置
 	struct block_device *b_bdev;
 	bh_end_io_t *b_end_io;		/* I/O completion */
  	void *b_private;		/* reserved for b_end_io */
