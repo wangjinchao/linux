@@ -270,12 +270,17 @@ struct bio {
 						 */
 	unsigned short		bi_flags;	/* BIO_* below */
 	unsigned short		bi_ioprio;
+	// 操作状态, 成功, 失败, 超时, 介质错误等
 	blk_status_t		bi_status;
+	// 记录尚未完成的片段的数量, 一个bio如果较大会拆分成多个
 	atomic_t		__bi_remaining;
-
+	
+	// 似乎是多个同时执行的一个迭代器
 	struct bvec_iter	bi_iter;
 
+	// 请求的标识信息, 各设备有自己的用途
 	blk_qc_t		bi_cookie;
+	// 结束时的回调函数
 	bio_end_io_t		*bi_end_io;
 	void			*bi_private;
 #ifdef CONFIG_BLK_CGROUP
@@ -288,6 +293,7 @@ struct bio {
 	struct blkcg_gq		*bi_blkg;
 	struct bio_issue	bi_issue;
 #ifdef CONFIG_BLK_CGROUP_IOCOST
+	// 成本评估, 读写性能和相关meta维护
 	u64			bi_iocost_cost;
 #endif
 #endif
@@ -312,8 +318,10 @@ struct bio {
 
 	atomic_t		__bi_cnt;	/* pin count */
 
+	// 一个bio对应一个请求, bi_io_vec 对应一个设备地址操作
 	struct bio_vec		*bi_io_vec;	/* the actual vec list */
 
+	// 为加快bio操作, bio有个自己的内存池, 降低重复的内存申请和释放操作
 	struct bio_set		*bi_pool;
 
 	/*
