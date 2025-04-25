@@ -1998,6 +1998,8 @@ struct inode_operations {
 
 	int (*readlink) (struct dentry *, char __user *,int);
 
+	// 这个目的是为了创建一个新的文件, sb中的alloc主要是创建一个inode对象
+	// create通常会调用sb->alloc_inode 来分配一个inode
 	int (*create) (struct mnt_idmap *, struct inode *,struct dentry *,
 		       umode_t, bool);
 	int (*link) (struct dentry *,struct inode *,struct dentry *);
