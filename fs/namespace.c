@@ -3687,7 +3687,7 @@ long do_mount(const char *dev_name, const char __user *dir_name,
 {
 	struct path path;
 	int ret;
-
+	// dfd, 指示 基于当前路径去查询path
 	ret = user_path_at(AT_FDCWD, dir_name, LOOKUP_FOLLOW, &path);
 	if (ret)
 		return ret;
@@ -3877,6 +3877,8 @@ struct dentry *mount_subtree(struct vfsmount *m, const char *name)
 }
 EXPORT_SYMBOL(mount_subtree);
 
+// type 文件系统类型, 例如ext2, ext4等
+// data 通常是传递的额外参数, 例如 ro/rw等, 以字符串格式存储
 SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
 		char __user *, type, unsigned long, flags, void __user *, data)
 {

@@ -401,6 +401,7 @@ static inline bool is_sync_kiocb(struct kiocb *kiocb)
 	return kiocb->ki_complete == NULL;
 }
 
+// 通常一个文件系统对应一个
 struct address_space_operations {
 	int (*writepage)(struct page *page, struct writeback_control *wbc);
 	int (*read_folio)(struct file *, struct folio *);
@@ -469,17 +470,19 @@ extern const struct address_space_operations empty_aops;
  * @private_list: For use by the owner of the address_space.
  * @private_data: For use by the owner of the address_space.
  */
-// 除了文件系统会用到, 进程管理也会用到
+// physical pages of a file
 struct address_space {
 	struct inode		*host;
 	struct xarray		i_pages;
 	struct rw_semaphore	invalidate_lock;
+	// 分配内存时的标志
 	gfp_t			gfp_mask;
 	atomic_t		i_mmap_writable;
 #ifdef CONFIG_READ_ONLY_THP_FOR_FS
 	/* number of thp, only for non-shmem files */
 	atomic_t		nr_thps;
 #endif
+	// 使用红黑树来管理内存映射
 	struct rb_root_cached	i_mmap;
 	unsigned long		nrpages;
 	pgoff_t			writeback_index;

@@ -97,7 +97,7 @@ static void sync_fs_one_sb(struct super_block *sb, void *arg)
 void ksys_sync(void)
 {
 	int nowait = 0, wait = 1;
-
+	// sync 真实入口
 	wakeup_flusher_threads(WB_REASON_SYNC);
 	iterate_supers(sync_inodes_one_sb, NULL);
 	iterate_supers(sync_fs_one_sb, &nowait);
