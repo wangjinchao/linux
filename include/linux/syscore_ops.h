@@ -10,6 +10,7 @@
 
 #include <linux/list.h>
 
+// 与电源管理模块密切配合, 各模块注册回调
 struct syscore_ops {
 	struct list_head node;
 	int (*suspend)(void);
