@@ -1,5 +1,5 @@
 #!/bin/bash
-
+set -e
 time (
 	make O=out -j$(nproc) deb-pkg
 	ssh qemu "rm -rf /root/debs/*.deb"

@@ -30,19 +30,6 @@
 		}
 	      }
 	    ]
-	  },
-	  {
-	    "label": "build",
-	    "type": "shell",
-	    "command": "make",
-	    "group": {
-	      "kind": "build",
-	      "isDefault": true
-	    },
-	    "presentation": {
-	      "echo": false,
-	      "group": "build"
-	    }
 	  }
 	]
       }

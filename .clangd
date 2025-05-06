@@ -12,6 +12,10 @@ CompileFlags:
     - -fno-strict-overflow
     - -fno-omit-frame-pointer
     - -fno-unit-at-a-time
+    - -fno-ipa-cp-clone
+    - -fno-partial-inlining
+    - -fsanitize=
+    - -mrecord-mcount
 
   # 全局忽略参数相关警告
   Add:
