@@ -6,7 +6,8 @@
 	  {
 	    "label": "vm",
 	    "type": "shell",
-	    "command": "cd /root/learn_linux_lts/kernel_debug; ./qemu_debug.sh",
+	    "command": "cd /root/learn_linux_lts/kernel_debug; ./qemu_debug_tcg.sh",
+	//     "command": "cd /root/learn_linux_lts/kernel_debug; ./qemu_debug_kvm.sh",
 	    "presentation": {
 	      "echo": true,
 	      "clear": true,
@@ -26,7 +27,7 @@
 		"background": {
 		  "activeOnStart": true,
 		  "beginsPattern": ".",
-		  "endsPattern": ".",
+		  "endsPattern": "gdb server started, waiting client",
 		}
 	      }
 	    ]
