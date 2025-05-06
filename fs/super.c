@@ -1614,12 +1614,13 @@ struct dentry *mount_bdev(struct file_system_type *fs_type,
 	struct super_block *s;
 	int error;
 	dev_t dev;
-
+	// 通过dev名称查找dev_t对象
 	error = lookup_bdev(dev_name, &dev);
 	if (error)
 		return ERR_PTR(error);
 
 	flags |= SB_NOSEC;
+	// 申请super block 所需空间
 	s = sget(fs_type, test_bdev_super, set_bdev_super, flags, &dev);
 	if (IS_ERR(s))
 		return ERR_CAST(s);
@@ -1637,9 +1638,12 @@ struct dentry *mount_bdev(struct file_system_type *fs_type,
 		 * reference and SB_BORN is not set yet.
 		 */
 		super_unlock_excl(s);
+		// 查找 dev对应的 block_device
 		error = setup_bdev_super(s, flags, NULL);
 		__super_lock_excl(s);
 		if (!error)
+			// 读取 bdev的 对应block并初始化 具体文件系统的super block
+			// 例如 struct ext2_super_block
 			error = fill_super(s, data, flags & SB_SILENT ? 1 : 0);
 		if (error) {
 			deactivate_locked_super(s);

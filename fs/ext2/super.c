@@ -808,6 +808,7 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	struct ext2_super_block * es;
 	struct inode *root;
 	unsigned long block;
+	// 获取 super block 所在位置
 	unsigned long sb_block = get_sb_block(&data);
 	unsigned long logic_sb_block;
 	unsigned long offset = 0;
@@ -832,6 +833,7 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	}
 	sb->s_fs_info = sbi;
 	sbi->s_sb_block = sb_block;
+	// ext2 的dax 默认禁用, 即将废弃的特性
 	sbi->s_daxdev = fs_dax_get_by_bdev(sb->s_bdev, &sbi->s_dax_part_off,
 					   NULL, NULL);
 
@@ -861,7 +863,7 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	} else {
 		logic_sb_block = sb_block;
 	}
-
+	// 通过 block层读取sb所在block
 	if (!(bh = sb_bread(sb, logic_sb_block))) {
 		ext2_msg(sb, KERN_ERR, "error: unable to read superblock");
 		goto failed_sbi;
@@ -1169,7 +1171,7 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_qcop = &ext2_quotactl_ops;
 	sb->s_quota_types = QTYPE_MASK_USR | QTYPE_MASK_GRP;
 #endif
-
+	// 读取ext2 的root inode
 	root = ext2_iget(sb, EXT2_ROOT_INO);
 	if (IS_ERR(root)) {
 		ret = PTR_ERR(root);
@@ -1180,7 +1182,7 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 		ext2_msg(sb, KERN_ERR, "error: corrupt root inode, run e2fsck");
 		goto failed_mount3;
 	}
-
+	// 将inode转换成 dentry
 	sb->s_root = d_make_root(root);
 	if (!sb->s_root) {
 		ext2_msg(sb, KERN_ERR, "error: get root inode failed");
@@ -1473,6 +1475,7 @@ static int ext2_statfs (struct dentry * dentry, struct kstatfs * buf)
 static struct dentry *ext2_mount(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *data)
 {
+	// 一种通用的 mount实现方式, 代表文件系统基于 block
 	return mount_bdev(fs_type, flags, dev_name, data, ext2_fill_super);
 }
 
@@ -1623,7 +1626,7 @@ out:
 }
 
 #endif
-
+// ext2 文件系统的入口
 static struct file_system_type ext2_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "ext2",
