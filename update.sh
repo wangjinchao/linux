@@ -10,4 +10,5 @@ time (
 	rm *.buildinfo
 	rm *.changes
 	rm linux-upstream*.tar.gz
+	scp qemu:/boot/initrd.img-6.6.66+ /root/learn_linux_lts/kernel_debug/
 )
