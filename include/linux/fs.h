@@ -401,7 +401,7 @@ static inline bool is_sync_kiocb(struct kiocb *kiocb)
 	return kiocb->ki_complete == NULL;
 }
 
-// 通常一个文件系统对应一个
+// 通常一个文件对应一个, 一个bdev对应一个
 struct address_space_operations {
 	int (*writepage)(struct page *page, struct writeback_control *wbc);
 	int (*read_folio)(struct file *, struct folio *);
@@ -664,6 +664,7 @@ struct inode {
 
 	const struct inode_operations	*i_op;
 	struct super_block	*i_sb;
+	// 用于保留pagecache 相关的映射
 	struct address_space	*i_mapping;
 
 #ifdef CONFIG_SECURITY
