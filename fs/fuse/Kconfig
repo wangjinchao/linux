@@ -28,6 +28,8 @@ config CUSE
 	  If you want to develop or use a userspace character device
 	  based on CUSE, answer Y or M.
 
+# 开启后 虚拟机中有了 fuse 的client, 用于访问 qemu host 提供的 virtio 文件系统
+# 需要宿主机运行 virtiofsd, 使用 qemu的 vhost-user-fs-pci 将共享目录传递给虚拟机
 config VIRTIO_FS
 	tristate "Virtio Filesystem"
 	depends on FUSE_FS
@@ -38,7 +40,7 @@ config VIRTIO_FS
 
 	  If you want to share files between guests or with the host, answer Y
 	  or M.
-
+# 配合 virtio fs 使用的, 依赖 VIRTIO_FS
 config FUSE_DAX
 	bool "Virtio Filesystem Direct Host Memory Access support"
 	default y
