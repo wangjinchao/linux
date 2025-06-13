@@ -45,7 +45,8 @@ struct serial_in_rdev {
 /*
  * MD's 'extended' device
  */
-struct md_rdev {
+// 单个的磁盘, 从属于mddev
+ struct md_rdev {
 	struct list_head same_set;	/* RAID devices within the same set */
 
 	sector_t sectors;		/* Device size (in 512bytes sectors) */
@@ -619,6 +620,7 @@ struct md_personality
 	int level;
 	struct list_head list;
 	struct module *owner;
+	// __must_check 会让编译器强制开发者检查返回值
 	bool __must_check (*make_request)(struct mddev *mddev, struct bio *bio);
 	/*
 	 * start up works that do NOT require md_thread. tasks that
