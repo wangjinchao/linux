@@ -1,8 +1,11 @@
+#include "linux/printk.h"
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
 #include <linux/string.h>
+#include <linux/utsname.h>
+
 #include "stackwatch.h"
 
 MODULE_AUTHOR("Wang Jinchao");
@@ -71,7 +74,8 @@ static ssize_t stackwatch_proc_write(struct file *file,
 
 	ret = start_monitoring(target_function, offset);
 	if (ret < 0) {
-		pr_err("StackWatch: Failed to monitor %s\n", target_function);
+		pr_err("StackWatch: Failed to monitor %s with %d\n",
+		       target_function, ret);
 		return ret;
 	}
 	pr_info("StackWatch: Now monitoring %s+0x%llx\n", target_function,
@@ -114,17 +118,38 @@ static const struct proc_ops stackwatch_proc_ops = {
 	.proc_write = stackwatch_proc_write,
 };
 
-static int __init stackwatch_init(void)
+static int is_hwbp_supported(void)
 {
-	int ret;
+	const char *supported_archs[] = {
+	    "x86_64",
+	    // "i386",
+	    // "aarch64",
+	    // "armv7l",
+	    // "ppc64le",
+	    // "s390x",
+	    NULL
+	};
 
-	/* Initialize HWBP subsystem */
-	ret = hwbp_init();
-	if (ret) {
-		pr_err("StackWatch: Failed to initialize HWBP\n");
-		return ret;
+	const char *current_arch = utsname()->machine;
+	int i;
+
+	for (i = 0; supported_archs[i] != NULL; i++) {
+		if (strcmp(current_arch, supported_archs[i]) == 0) {
+			pr_info("Architecture %s supports stackwatch\n", current_arch);
+			return 1;
+		}
 	}
 
+	pr_warn("Architecture %s does not support hardware breakpoints\n", current_arch);
+
+	return 0;
+}
+
+static int __init stackwatch_init(void)
+{
+	if (!is_hwbp_supported()) {
+		return 0;
+	}
 	/* Create proc interface */
 	if (!proc_create("stackwatch", 0644, NULL, &stackwatch_proc_ops)) {
 		hwbp_cleanup();
@@ -155,9 +180,17 @@ int start_monitoring(const char *func_name, unsigned long long offset)
 {
 	int ret;
 
-	ret = setup_probes(target_function, offset);
-	if (ret)
+	/* Initialize HWBP subsystem */
+	ret = hwbp_init();
+	if (ret) {
+		pr_err("StackWatch: Failed to initialize HWBP\n");
 		return ret;
+	}
+	ret = setup_probes(target_function, offset);
+	if (ret) {
+		pr_err("StackWatch setup_probes fail with %d\n", ret);
+		return ret;
+	}
 
 	monitoring_active = true;
 	return 0;
@@ -166,7 +199,7 @@ int start_monitoring(const char *func_name, unsigned long long offset)
 void stop_monitoring(void)
 {
 	cleanup_probes();
-	hwbp_disarm_all();
+	hwbp_cleanup();
 	monitoring_active = false;
 	target_function[0] = '\0';
 }

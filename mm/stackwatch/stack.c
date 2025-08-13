@@ -26,11 +26,13 @@ inline unsigned long find_canary_address(struct pt_regs *regs)
 	stack_end =
 		(unsigned long *)current->stack + THREAD_SIZE / sizeof(long);
 	expected_canary = current->stack_canary; /* Use stored canary */
-	pr_info("expected_canary:%lu\n", expected_canary);
+	pr_info("StackWatch: expected_canary:%lx\n", expected_canary);
 	for (i = 0; i < MAX_FRAME_SEARCH && &stack_ptr[i] < stack_end; i++) {
-		pr_info("stack_ptr[%d]:%lu\n", i, stack_ptr[i]);
-		if (stack_ptr[i] == expected_canary)
+		pr_debug("stack_ptr[%d]:%lx\n", i, stack_ptr[i]);
+		if (stack_ptr[i] == expected_canary) {
+			pr_info("StackWatch: canary_addr: 0x%px", &stack_ptr[i]);
 			return (unsigned long)&stack_ptr[i];
+		}
 	}
 
 	return 0;
@@ -46,6 +48,7 @@ static void entry_handler(struct kprobe *p, struct pt_regs *regs,
 {
 	unsigned long canary_addr;
 	int *depth;
+	int ret;
 
 	/* Handle nested calls - only monitor outermost */
 	depth = this_cpu_ptr(&monitor_depth);
@@ -67,7 +70,11 @@ static void entry_handler(struct kprobe *p, struct pt_regs *regs,
 	}
 
 	/* Arm HWBP on all CPUs */
-	hwbp_arm_all(canary_addr);
+	ret = hwbp_arm_all(canary_addr);
+	if (ret) {
+		pr_err("hwbp_arm_all fail with %d\n", ret);
+		return;
+	}
 
 	pr_debug("StackWatch: Armed for %s at 0x%lx (depth %d)\n",
 		 target_function, canary_addr, *depth);
@@ -104,8 +111,8 @@ int setup_probes(const char *func_name, unsigned long long offset)
 
 	ret = register_kprobe(&entry_probe);
 	if (ret < 0) {
-		pr_err("StackWatch: Failed to register entry probe for %s\n",
-		       func_name);
+		pr_err("StackWatch: register_kprobe fail with %d\n",
+		       ret);
 		return ret;
 	}
 

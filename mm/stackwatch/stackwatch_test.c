@@ -17,13 +17,20 @@ MODULE_LICENSE("GPL");
 
 static struct proc_dir_entry *test_proc;
 
+void hwbp_setup_method2(void);
+
+extern void hwbp_info_test(void);
+extern void hwbp_fire_test(void);
 /* Test function 1: Simple buffer overflow */
 static noinline void vulnerable_strcpy(const char *input)
 {
 	char buffer[32]; /* Small buffer to trigger overflow */
 
 	pr_info("Test: %s called with: %s\n", __func__, input);
+	// hwbp_setup_method2();
 
+	hwbp_info_test();
+	// hwbp_fire_test();
 	/* This will overflow if input > 32 chars */
 	strcpy(buffer, input);
 

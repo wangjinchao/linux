@@ -26,9 +26,11 @@ int hwbp_init(void);
 void hwbp_cleanup(void);
 int hwbp_arm_all(unsigned long addr);
 void hwbp_disarm_all(void);
+void hwbp_info_test(void);
+void hwbp_fire_test(void);
 
 /* Stack detection - from stack.c */
 unsigned long find_canary_address(struct pt_regs *regs);
-unsigned long find_canary_placement_offset(const char *func_name);
+
 
 #endif /* _STACKWATCH_H */
