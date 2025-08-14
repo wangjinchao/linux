@@ -3,12 +3,18 @@
  * Hardware breakpoint management for StackWatch (minimal approach)
  */
 
+#include <linux/kprobes.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/perf_event.h>
+#include <linux/sched/debug.h>
 #include <linux/smp.h>
 #include <linux/slab.h>
 #include <asm/hw_breakpoint.h>
+#include <linux/stacktrace.h>
+
 #include "stackwatch.h"
+
+#define MAX_STACK_ENTRIES 64
 
 /* Per-CPU minimal breakpoint storage */
 static struct perf_event *__percpu *hwbp_events;
@@ -16,19 +22,73 @@ static DEFINE_SPINLOCK(hwbp_lock);
 
 static unsigned long long marker;
 
-/* Hardware breakpoint callback - corruption detected! */
+struct hwbp_worker {
+	struct work_struct work;
+	int original_cpu;
+} myworker;
+static void setup_hwbp_on_cpu_wrapper(void *useless);
+
+static DEFINE_PER_CPU(call_single_data_t,
+		      hwbp_csd) = CSD_INIT(setup_hwbp_on_cpu_wrapper, NULL);
+
+#define MAX_STACK_ENTRIES 64
+
+/* Resolved once, then reused */
+static unsigned long tramp_start, tramp_end;
+
+static void stackwatch_resolve_trampolines(void)
+{
+	unsigned long sz, off;
+
+	if (likely(tramp_start && tramp_end))
+		return;
+
+	tramp_start = kallsyms_lookup_name("arch_rethook_trampoline");
+	if (tramp_start && kallsyms_lookup_size_offset(tramp_start, &sz, &off))
+		tramp_end = tramp_start + sz;
+}
+
+static bool stackwatch_should_ignore(unsigned long ip)
+{
+	if (tramp_start && tramp_end && ip >= tramp_start && ip < tramp_end)
+		return true;
+
+	return false;
+}
+
 static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 			 struct pt_regs *regs)
 {
+	unsigned long entries[MAX_STACK_ENTRIES];
+	int i, nr = 0;
+
+	stackwatch_resolve_trampolines();
+
+#if IS_ENABLED(CONFIG_STACKTRACE)
+	/* Unwind the *interrupted* context */
+	nr = stack_trace_save_regs(regs, entries, MAX_STACK_ENTRIES, 0);
+
+	/* If any frame is inside the rethook trampolines, ignore this hit */
+	for (i = 0; i < nr; i++) {
+		if (stackwatch_should_ignore(entries[i])) {
+			pr_debug("find rethooktrampolines, ignore this hit\n");
+			return;
+		}
+	}
+#else
+	/* Cannot filter reliably without stacktrace support; proceed */
+#endif
+
+	pr_alert("\n\n===================================================\n");
 	pr_alert("STACKWATCH: Stack corruption detected!\n");
 	pr_alert("  Function: %s\n", target_function);
 	pr_alert("  PID: %d (%s)\n", current->pid, current->comm);
-	pr_alert("  Corruption at IP: 0x%lx\n", regs->ip);
+	pr_alert("  Corruption at IP: %pS\n",
+		 (void *)instruction_pointer(regs));
 
-	/* Dump stack trace */
-	dump_stack();
+	/* Registers at the trigger point */
+	show_regs(regs);
 
-	/* Optionally trigger panic for post-mortem analysis */
 	if (panic_on_corruption)
 		panic("StackWatch: Stack corruption detected");
 }
@@ -54,8 +114,38 @@ static void setup_hwbp_on_cpu(void *useless)
 		pr_err("StackWatch: Failed to install HWBP on CPU %d\n", cpu);
 		return;
 	}
-	pr_info("StackWatch: HWBP armed on CPU %d at 0x%llx\n", cpu,
-		(unsigned long long)bp->attr.bp_addr);
+	if (bp->attr.bp_addr == (unsigned long)&marker) {
+		pr_info("StackWatch: HWBP disarmed on CPU %d at 0x%llx\n", cpu,
+			(unsigned long long)bp->attr.bp_addr);
+	} else {
+		pr_info("StackWatch: HWBP armed on CPU %d at 0x%llx\n", cpu,
+			(unsigned long long)bp->attr.bp_addr);
+	}
+}
+
+static void setup_hwbp_on_cpu_wrapper(void *useless)
+{
+	if (smp_processor_id() == myworker.original_cpu)
+		return;
+	setup_hwbp_on_cpu(useless);
+}
+
+static void setup_hwbp_work_fn(struct work_struct *work)
+{
+	struct hwbp_worker *worker =
+		container_of(work, struct hwbp_worker, work);
+	int original_cpu = READ_ONCE(worker->original_cpu);
+	call_single_data_t *csd;
+
+	int cpu;
+
+	for_each_online_cpu(cpu) {
+		if (cpu == original_cpu)
+			continue;
+		// Asynchronously call the function on all other CPUs
+		csd = &per_cpu(hwbp_csd, cpu);
+		smp_call_function_single_async(cpu, csd);
+	}
 }
 
 int hwbp_init(void)
@@ -74,6 +164,8 @@ int hwbp_init(void)
 		return ret;
 	}
 
+	INIT_WORK(&myworker.work, setup_hwbp_work_fn);
+
 	return 0;
 }
 
@@ -88,13 +180,6 @@ void hwbp_cleanup(void)
 	unregister_wide_hw_breakpoint(hwbp_events);
 	hwbp_events = NULL;
 }
-
-static void setup_hwbp_work_fn(struct work_struct *work)
-{
-	smp_call_function(setup_hwbp_on_cpu, NULL, 1);
-}
-
-static DECLARE_WORK(setup_hwbp_work, setup_hwbp_work_fn);
 
 /* IRQ-safe functions using minimal breakpoint structures */
 int hwbp_arm_all(unsigned long addr)
@@ -122,8 +207,10 @@ int hwbp_arm_all(unsigned long addr)
 	/* Update address in all minimal breakpoint structures */
 	for_each_possible_cpu(cpu) {
 		bp = *per_cpu_ptr(hwbp_events, cpu);
-		bp->attr.bp_addr = addr;
+		WRITE_ONCE(bp->attr.bp_addr, addr);
 	}
+
+	WRITE_ONCE(myworker.original_cpu, smp_processor_id());
 
 	spin_unlock_irqrestore(&hwbp_lock, flags);
 	wmb();
@@ -132,13 +219,15 @@ int hwbp_arm_all(unsigned long addr)
 	/* Run on current CPU directly */
 	setup_hwbp_on_cpu(NULL);
 
-	queue_work(system_highpri_wq, &setup_hwbp_work);
+	queue_work(system_highpri_wq, &myworker.work);
 	return 0;
 }
 
 void hwbp_disarm_all(void)
 {
+	pr_info("StackWatch hwbp_disarm_all begin\n");
 	hwbp_arm_all((unsigned long)&marker);
+	pr_info("StackWatch hwbp_disarm_all end\n");
 }
 
 void hwbp_info_test(void)
