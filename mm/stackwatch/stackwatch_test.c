@@ -11,30 +11,29 @@
 #include <linux/string.h>
 #include <linux/delay.h>
 
-MODULE_AUTHOR("Wang Jinchao");
+// call hwbp_addr_test for a direct test
+// #include "stackwatch.h"
+
+MODULE_AUTHOR("Jinchao Wang");
 MODULE_DESCRIPTION("StackWatch Guard Test Cases");
 MODULE_LICENSE("GPL");
 
 static struct proc_dir_entry *test_proc;
 
-void hwbp_setup_method2(void);
 
-extern void hwbp_info_test(void);
-extern void hwbp_fire_test(void);
 /* Test function 1: Simple buffer overflow */
 static noinline void vulnerable_strcpy(const char *input)
 {
 	char buffer[32]; /* Small buffer to trigger overflow */
 
-	pr_info("Test: %s called with: %s\n", __func__, input);
-	// hwbp_setup_method2();
+	pr_info("StackWatch Test: %s called with input: %s\n", __func__, input);
 
-	hwbp_info_test();
-	// hwbp_fire_test();
+	// hwbp_addr_test();
+
 	/* This will overflow if input > 32 chars */
 	strcpy(buffer, input);
 
-	pr_info("Test: strcpy completed, buffer contains: %.32s\n", buffer);
+	pr_info("StackWatch Test: strcpy completed, buffer contains: %.32s\n", buffer);
 }
 
 /* Test function 2: Controlled overflow */
@@ -43,7 +42,7 @@ static noinline void controlled_overflow(int overflow_size)
 	char buffer[64];
 	char *overflow_ptr;
 
-	pr_info("Test: %s with size %d\n", __func__, overflow_size);
+	pr_info("StackWatch Test: %s with overflow size %d\n", __func__, overflow_size);
 
 	memset(buffer, 'A', sizeof(buffer));
 	buffer[sizeof(buffer) - 1] = '\0';
@@ -52,11 +51,11 @@ static noinline void controlled_overflow(int overflow_size)
 		/* Intentionally write past buffer end */
 		overflow_ptr = buffer + sizeof(buffer);
 		memset(overflow_ptr, 'X', overflow_size);
-		pr_info("Test: Wrote %d bytes past buffer end\n",
+		pr_info("StackWatch Test: Wrote %d bytes past buffer end\n",
 			overflow_size);
 	}
 
-	pr_info("Test: Function ending normally\n");
+	pr_info("StackWatch Test: Function ending normally\n");
 }
 
 /* Test function 3: Recursive with overflow */
@@ -64,7 +63,7 @@ static noinline void recursive_vulnerable(int depth, int corrupt_at_depth)
 {
 	char buffer[48];
 
-	pr_info("Test: %s depth=%d, corrupt_at=%d\n", __func__, depth,
+	pr_info("StackWatch Test: %s depth=%d, corrupt_at=%d\n", __func__, depth,
 		corrupt_at_depth);
 
 	memset(buffer, 'R', sizeof(buffer));
@@ -74,13 +73,13 @@ static noinline void recursive_vulnerable(int depth, int corrupt_at_depth)
 		/* Corrupt stack at specific depth */
 		char *overflow = buffer + sizeof(buffer);
 		*overflow = 'C'; /* Corrupt one byte past buffer */
-		pr_info("Test: Corrupted stack at depth %d\n", depth);
+		pr_info("StackWatch Test: Corrupted stack at depth %d\n", depth);
 	}
 
 	if (depth > 0)
 		recursive_vulnerable(depth - 1, corrupt_at_depth);
 
-	pr_info("Test: Returning from depth %d\n", depth);
+	pr_info("StackWatch Test: Returning from depth %d\n", depth);
 }
 
 /* Test function 4: No corruption (control test) */
@@ -88,12 +87,12 @@ static noinline void safe_function(const char *input)
 {
 	char buffer[128]; /* Large enough buffer */
 
-	pr_info("Test: %s called\n", __func__);
+	pr_info("StackWatch Test: %s called\n", __func__);
 
 	strncpy(buffer, input, sizeof(buffer) - 1);
 	buffer[sizeof(buffer) - 1] = '\0';
 
-	pr_info("Test: %s completed normally\n", __func__);
+	pr_info("StackWatch Test: %s completed normally\n", __func__);
 }
 
 /* Proc interface for triggering tests */
@@ -156,7 +155,7 @@ static ssize_t test_proc_write(struct file *file, const char __user *buffer,
 		}
 	} else {
 		pr_err("StackWatch Test: Invalid command format\n");
-		pr_info("Usage: echo 'test[1-4] [param]' > /proc/stackwatch_test\n");
+		pr_info("StackWatch Test: Usage: echo 'test[1-4] [param]' > /proc/stackwatch_test\n");
 		return -EINVAL;
 	}
 
@@ -208,7 +207,7 @@ static int __init stackwatch_test_init(void)
 	}
 
 	pr_info("StackWatch Test: Module loaded\n");
-	pr_info("Usage: cat /proc/stackwatch_test for instructions\n");
+	pr_info("StackWatch Test: Usage - cat /proc/stackwatch_test for instructions\n");
 
 	return 0;
 }

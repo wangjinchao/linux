@@ -23924,7 +23924,7 @@ S:	Supported
 F:	Documentation/process/stable-kernel-rules.rst
 
 STACK WATCH
-M:	Jinchao Wang <wangjinchao600@gmail.org>
+M:	Jinchao Wang <wangjinchao600@gmail.com>
 S:	Supported
 F:	mm/stackwatch/
 

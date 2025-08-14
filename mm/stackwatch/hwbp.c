@@ -71,7 +71,7 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 	/* If any frame is inside the rethook trampolines, ignore this hit */
 	for (i = 0; i < nr; i++) {
 		if (stackwatch_should_ignore(entries[i])) {
-			pr_debug("find rethooktrampolines, ignore this hit\n");
+			pr_debug("StackWatch: Found rethook trampolines, ignoring hit\n");
 			return;
 		}
 	}
@@ -81,10 +81,7 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 
 	pr_alert("\n\n===================================================\n");
 	pr_alert("STACKWATCH: Stack corruption detected!\n");
-	pr_alert("  Function: %s\n", target_function);
-	pr_alert("  PID: %d (%s)\n", current->pid, current->comm);
-	pr_alert("  Corruption at IP: %pS\n",
-		 (void *)instruction_pointer(regs));
+	pr_alert("  WatchFunction: %s\n", target_function);
 
 	/* Registers at the trigger point */
 	show_regs(regs);
@@ -115,11 +112,11 @@ static void setup_hwbp_on_cpu(void *useless)
 		return;
 	}
 	if (bp->attr.bp_addr == (unsigned long)&marker) {
-		pr_info("StackWatch: HWBP disarmed on CPU %d at 0x%llx\n", cpu,
-			(unsigned long long)bp->attr.bp_addr);
+		pr_info("StackWatch: HWBP disarmed on CPU %d at 0x%p\n", cpu,
+			(void *)bp->attr.bp_addr);
 	} else {
-		pr_info("StackWatch: HWBP armed on CPU %d at 0x%llx\n", cpu,
-			(unsigned long long)bp->attr.bp_addr);
+		pr_info("StackWatch: HWBP armed on CPU %d at 0x%p\n", cpu,
+			(void *)bp->attr.bp_addr);
 	}
 }
 
@@ -160,7 +157,7 @@ int hwbp_init(void)
 	hwbp_events = register_wide_hw_breakpoint(&attr, hwbp_handler, NULL);
 	if (IS_ERR((void *)hwbp_events)) {
 		int ret = PTR_ERR((void *)hwbp_events);
-		pr_err("register_wide_hw_breakpoint fail with %d\n", ret);
+		pr_err("StackWatch: Failed to register wide hw breakpoint: %d\n", ret);
 		return ret;
 	}
 
@@ -189,7 +186,7 @@ int hwbp_arm_all(unsigned long addr)
 	int cpu;
 
 	if (!addr) {
-		pr_err("hwbp_arm_all fail with invalid addr.\n");
+		pr_err("StackWatch: Invalid address for arming HWBP\n");
 		return -EINVAL;
 	}
 
@@ -225,20 +222,20 @@ int hwbp_arm_all(unsigned long addr)
 
 void hwbp_disarm_all(void)
 {
-	pr_info("StackWatch hwbp_disarm_all begin\n");
+	pr_info("StackWatch: Disarming all HWBPs\n");
 	hwbp_arm_all((unsigned long)&marker);
-	pr_info("StackWatch hwbp_disarm_all end\n");
+	pr_info("StackWatch: All HWBPs disarmed\n");
 }
 
-void hwbp_info_test(void)
+void hwbp_addr_show(void)
 {
 	struct perf_event *bp;
 
 	bp = *this_cpu_ptr(hwbp_events);
-	pr_info("hwbp_info_test bp->attr.bp_addr: 0x%llx\n", bp->attr.bp_addr);
+	pr_info("StackWatch: HWBP info test - bp_addr: 0x%llx\n", bp->attr.bp_addr);
 }
 
-void hwbp_fire_test(void)
+void hwbp_addr_test(void)
 {
 	struct perf_event *bp;
 

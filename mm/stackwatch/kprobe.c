@@ -3,8 +3,6 @@
  * Stack canary detection for StackWatch
  */
 
-#include "linux/kallsyms.h"
-#include "linux/printk.h"
 #include <linux/stackprotector.h>
 #include <linux/kprobes.h>
 #include "stackwatch.h"
@@ -13,7 +11,7 @@
 static DEFINE_PER_CPU(int, monitor_depth);
 
 /* Find canary address in current stack frame */
-inline unsigned long find_canary_address(struct pt_regs *regs)
+static inline unsigned long find_canary_address(struct pt_regs *regs)
 {
 	unsigned long *stack_ptr, *stack_end;
 	unsigned long expected_canary;
@@ -26,11 +24,11 @@ inline unsigned long find_canary_address(struct pt_regs *regs)
 	stack_end =
 		(unsigned long *)current->stack + THREAD_SIZE / sizeof(long);
 	expected_canary = current->stack_canary; /* Use stored canary */
-	pr_info("StackWatch: expected_canary: 0x%lx\n", expected_canary);
+	pr_info("StackWatch: Expected canary: 0x%lx\n", expected_canary);
 	for (i = 0; i < MAX_FRAME_SEARCH && &stack_ptr[i] < stack_end; i++) {
-		pr_debug("stack_ptr[%d]: 0x%lx\n", i, stack_ptr[i]);
+		pr_debug("StackWatch: Stack[%d]: 0x%lx\n", i, stack_ptr[i]);
 		if (stack_ptr[i] == expected_canary) {
-			pr_info("StackWatch: canary_addr: 0x%px", &stack_ptr[i]);
+			pr_info("StackWatch: Canary found at: 0x%p\n", &stack_ptr[i]);
 			return (unsigned long)&stack_ptr[i];
 		}
 	}
@@ -72,12 +70,12 @@ static void entry_handler(struct kprobe *p, struct pt_regs *regs,
 	/* Arm HWBP on all CPUs */
 	ret = hwbp_arm_all(canary_addr);
 	if (ret) {
-		pr_err("hwbp_arm_all fail with %d\n", ret);
+		pr_err("StackWatch: Failed to arm HWBP: %d\n", ret);
 		return;
 	}
 
-	pr_debug("StackWatch: Armed for %s at 0x%lx (depth %d)\n",
-		 target_function, canary_addr, *depth);
+	pr_debug("StackWatch: Armed for %s at 0x%px (depth %d)\n",
+		 target_function, (void *)canary_addr, *depth);
 }
 
 /* Function exit handler */
@@ -111,8 +109,7 @@ int setup_probes(const char *func_name, unsigned long long offset)
 
 	ret = register_kprobe(&entry_probe);
 	if (ret < 0) {
-		pr_err("StackWatch: register_kprobe fail with %d\n",
-		       ret);
+		pr_err("StackWatch: Failed to register kprobe: %d\n", ret);
 		return ret;
 	}
 
@@ -124,8 +121,8 @@ int setup_probes(const char *func_name, unsigned long long offset)
 
 	ret = register_kretprobe(&exit_probe);
 	if (ret < 0) {
-		pr_err("StackWatch: Failed to register exit probe for %s\n",
-		       func_name);
+		pr_err("StackWatch: Failed to register exit probe for %s: %d\n",
+		       func_name, ret);
 		unregister_kprobe(&entry_probe);
 		return ret;
 	}

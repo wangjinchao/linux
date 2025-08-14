@@ -8,7 +8,7 @@
 
 #include "stackwatch.h"
 
-MODULE_AUTHOR("Wang Jinchao");
+MODULE_AUTHOR("Jinchao Wang");
 MODULE_DESCRIPTION("Stack Corruption Debugger");
 MODULE_LICENSE("GPL");
 
@@ -22,6 +22,34 @@ bool panic_on_corruption;
 module_param(panic_on_corruption, bool, 0644);
 MODULE_PARM_DESC(panic_on_corruption,
 		 "Trigger kernel panic when corruption detected");
+
+static int start_monitoring(const char *func_name, unsigned long long offset)
+{
+	int ret;
+
+	/* Initialize HWBP subsystem */
+	ret = hwbp_init();
+	if (ret) {
+		pr_err("StackWatch: Failed to initialize HWBP subsystem: %d\n", ret);
+		return ret;
+	}
+	ret = setup_probes(target_function, offset);
+	if (ret) {
+		pr_err("StackWatch: Failed to setup probes: %d\n", ret);
+		return ret;
+	}
+
+	monitoring_active = true;
+	return 0;
+}
+
+static void stop_monitoring(void)
+{
+	cleanup_probes();
+	hwbp_cleanup();
+	monitoring_active = false;
+	target_function[0] = '\0';
+}
 
 /* Proc interface for configuration */
 static ssize_t stackwatch_proc_write(struct file *file,
@@ -61,11 +89,11 @@ static ssize_t stackwatch_proc_write(struct file *file,
 		// Use kstrtoull to automatically handle hex (0x) and decimal
 		ret = kstrtoull(offset_str, 0, &offset);
 		if (ret) {
-			pr_err("StackWatch: Invalid offset format.\n");
+			pr_err("StackWatch: Invalid offset format\n");
 			return -EINVAL;
 		}
 	} else {
-		pr_err("StackWatch: Offset must be supplied.");
+		pr_err("StackWatch: Offset must be supplied\n");
 		return -EINVAL;
 	}
 
@@ -74,7 +102,7 @@ static ssize_t stackwatch_proc_write(struct file *file,
 
 	ret = start_monitoring(target_function, offset);
 	if (ret < 0) {
-		pr_err("StackWatch: Failed to monitor %s with %d\n",
+		pr_err("StackWatch: Failed to monitor %s: %d\n",
 		       target_function, ret);
 		return ret;
 	}
@@ -135,12 +163,14 @@ static int is_hwbp_supported(void)
 
 	for (i = 0; supported_archs[i] != NULL; i++) {
 		if (strcmp(current_arch, supported_archs[i]) == 0) {
-			pr_info("Architecture %s supports stackwatch\n", current_arch);
+			pr_info("StackWatch: Architecture %s supports hardware breakpoints\n",
+				current_arch);
 			return 1;
 		}
 	}
 
-	pr_warn("Architecture %s does not support hardware breakpoints\n", current_arch);
+	pr_warn("StackWatch: Architecture %s does not support hardware breakpoints\n",
+		current_arch);
 
 	return 0;
 }
@@ -155,8 +185,8 @@ static int __init stackwatch_init(void)
 		hwbp_cleanup();
 		return -ENOMEM;
 	}
-	pr_info("StackWatch loaded - Phase 1\n");
-	pr_info("Usage: echo 'function_name+offset' > /proc/stackwatch\n");
+	pr_info("StackWatch: Module loaded - Phase 1\n");
+	pr_info("StackWatch: Usage: echo 'function_name+offset' > /proc/stackwatch\n");
 
 	return 0;
 }
@@ -173,35 +203,7 @@ static void __exit stackwatch_exit(void)
 	/* Cleanup HWBP subsystem */
 	hwbp_cleanup();
 
-	pr_info("StackWatch unloaded\n");
-}
-
-int start_monitoring(const char *func_name, unsigned long long offset)
-{
-	int ret;
-
-	/* Initialize HWBP subsystem */
-	ret = hwbp_init();
-	if (ret) {
-		pr_err("StackWatch: Failed to initialize HWBP\n");
-		return ret;
-	}
-	ret = setup_probes(target_function, offset);
-	if (ret) {
-		pr_err("StackWatch setup_probes fail with %d\n", ret);
-		return ret;
-	}
-
-	monitoring_active = true;
-	return 0;
-}
-
-void stop_monitoring(void)
-{
-	cleanup_probes();
-	hwbp_cleanup();
-	monitoring_active = false;
-	target_function[0] = '\0';
+	pr_info("StackWatch: Module unloaded\n");
 }
 
 module_init(stackwatch_init);
