@@ -26,9 +26,9 @@ inline unsigned long find_canary_address(struct pt_regs *regs)
 	stack_end =
 		(unsigned long *)current->stack + THREAD_SIZE / sizeof(long);
 	expected_canary = current->stack_canary; /* Use stored canary */
-	pr_info("StackWatch: expected_canary:%lx\n", expected_canary);
+	pr_info("StackWatch: expected_canary: 0x%lx\n", expected_canary);
 	for (i = 0; i < MAX_FRAME_SEARCH && &stack_ptr[i] < stack_end; i++) {
-		pr_debug("stack_ptr[%d]:%lx\n", i, stack_ptr[i]);
+		pr_debug("stack_ptr[%d]: 0x%lx\n", i, stack_ptr[i]);
 		if (stack_ptr[i] == expected_canary) {
 			pr_info("StackWatch: canary_addr: 0x%px", &stack_ptr[i]);
 			return (unsigned long)&stack_ptr[i];
