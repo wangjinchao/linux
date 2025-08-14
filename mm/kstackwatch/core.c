@@ -1,4 +1,3 @@
-#include "linux/printk.h"
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
@@ -6,7 +5,7 @@
 #include <linux/string.h>
 #include <linux/utsname.h>
 
-#include "stackwatch.h"
+#include "kstackwatch.h"
 
 MODULE_AUTHOR("Jinchao Wang");
 MODULE_DESCRIPTION("Stack Corruption Debugger");
@@ -52,9 +51,9 @@ static void stop_monitoring(void)
 }
 
 /* Proc interface for configuration */
-static ssize_t stackwatch_proc_write(struct file *file,
-				     const char __user *buffer, size_t count,
-				     loff_t *pos)
+static ssize_t kstackwatch_proc_write(struct file *file,
+				      const char __user *buffer, size_t count,
+				      loff_t *pos)
 {
 	char func_offset_str[MAX_FUNC_NAME_LEN + 10];
 	char *offset_str;
@@ -112,8 +111,8 @@ static ssize_t stackwatch_proc_write(struct file *file,
 	return count;
 }
 
-static ssize_t stackwatch_proc_read(struct file *file, char __user *buffer,
-				    size_t count, loff_t *pos)
+static ssize_t kstackwatch_proc_read(struct file *file, char __user *buffer,
+				     size_t count, loff_t *pos)
 {
 	char output[256];
 	int len;
@@ -128,7 +127,7 @@ static ssize_t stackwatch_proc_read(struct file *file, char __user *buffer,
 	} else {
 		len = snprintf(output, sizeof(output),
 			       "Not monitoring\n"
-			       "Usage: echo 'function_name+offset' > /proc/stackwatch\n");
+			       "Usage: echo 'function_name+offset' > /proc/kstackwatch\n");
 	}
 
 	if (count < len)
@@ -141,9 +140,9 @@ static ssize_t stackwatch_proc_read(struct file *file, char __user *buffer,
 	return len;
 }
 
-static const struct proc_ops stackwatch_proc_ops = {
-	.proc_read = stackwatch_proc_read,
-	.proc_write = stackwatch_proc_write,
+static const struct proc_ops kstackwatch_proc_ops = {
+	.proc_read = kstackwatch_proc_read,
+	.proc_write = kstackwatch_proc_write,
 };
 
 static int is_hwbp_supported(void)
@@ -175,30 +174,30 @@ static int is_hwbp_supported(void)
 	return 0;
 }
 
-static int __init stackwatch_init(void)
+static int __init kstackwatch_init(void)
 {
 	if (!is_hwbp_supported()) {
 		return 0;
 	}
 	/* Create proc interface */
-	if (!proc_create("stackwatch", 0644, NULL, &stackwatch_proc_ops)) {
+	if (!proc_create("kstackwatch", 0644, NULL, &kstackwatch_proc_ops)) {
 		hwbp_cleanup();
 		return -ENOMEM;
 	}
 	pr_info("StackWatch: Module loaded - Phase 1\n");
-	pr_info("StackWatch: Usage: echo 'function_name+offset' > /proc/stackwatch\n");
+	pr_info("StackWatch: Usage: echo 'function_name+offset' > /proc/kstackwatch\n");
 
 	return 0;
 }
 
-static void __exit stackwatch_exit(void)
+static void __exit kstackwatch_exit(void)
 {
 	/* Cleanup active monitoring */
 	if (monitoring_active)
 		stop_monitoring();
 
 	/* Remove proc interface */
-	remove_proc_entry("stackwatch", NULL);
+	remove_proc_entry("kstackwatch", NULL);
 
 	/* Cleanup HWBP subsystem */
 	hwbp_cleanup();
@@ -206,5 +205,5 @@ static void __exit stackwatch_exit(void)
 	pr_info("StackWatch: Module unloaded\n");
 }
 
-module_init(stackwatch_init);
-module_exit(stackwatch_exit);
+module_init(kstackwatch_init);
+module_exit(kstackwatch_exit);

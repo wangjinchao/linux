@@ -12,7 +12,7 @@
 #include <asm/hw_breakpoint.h>
 #include <linux/stacktrace.h>
 
-#include "stackwatch.h"
+#include "kstackwatch.h"
 
 #define MAX_STACK_ENTRIES 64
 
@@ -36,7 +36,7 @@ static DEFINE_PER_CPU(call_single_data_t,
 /* Resolved once, then reused */
 static unsigned long tramp_start, tramp_end;
 
-static void stackwatch_resolve_trampolines(void)
+static void kstackwatch_resolve_trampolines(void)
 {
 	unsigned long sz, off;
 
@@ -48,7 +48,7 @@ static void stackwatch_resolve_trampolines(void)
 		tramp_end = tramp_start + sz;
 }
 
-static bool stackwatch_should_ignore(unsigned long ip)
+static bool kstackwatch_should_ignore(unsigned long ip)
 {
 	if (tramp_start && tramp_end && ip >= tramp_start && ip < tramp_end)
 		return true;
@@ -62,7 +62,7 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 	unsigned long entries[MAX_STACK_ENTRIES];
 	int i, nr = 0;
 
-	stackwatch_resolve_trampolines();
+	kstackwatch_resolve_trampolines();
 
 #if IS_ENABLED(CONFIG_STACKTRACE)
 	/* Unwind the *interrupted* context */
@@ -70,7 +70,7 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 
 	/* If any frame is inside the rethook trampolines, ignore this hit */
 	for (i = 0; i < nr; i++) {
-		if (stackwatch_should_ignore(entries[i])) {
+		if (kstackwatch_should_ignore(entries[i])) {
 			pr_debug("StackWatch: Found rethook trampolines, ignoring hit\n");
 			return;
 		}
@@ -79,12 +79,12 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 	/* Cannot filter reliably without stacktrace support; proceed */
 #endif
 
-	pr_alert("\n\n===================================================\n");
-	pr_alert("STACKWATCH: Stack corruption detected!\n");
-	pr_alert("  WatchFunction: %s\n", target_function);
+	pr_emerg("========== KStackWatch Triggered: Start =======\n");
+	pr_emerg("  WatchFunction: %s\n", target_function);
 
 	/* Registers at the trigger point */
 	show_regs(regs);
+	pr_emerg("========== KStackWatch Triggered: End ==========\n");
 
 	if (panic_on_corruption)
 		panic("StackWatch: Stack corruption detected");

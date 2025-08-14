@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * StackWatch Guard Test Module
- * Creates intentional stack corruption for testing stackwatch detection
+ * Creates intentional stack corruption for testing kstackwatch detection
  */
 
 #include <linux/module.h>
@@ -10,9 +10,6 @@
 #include <linux/uaccess.h>
 #include <linux/string.h>
 #include <linux/delay.h>
-
-// call hwbp_addr_test for a direct test
-// #include "stackwatch.h"
 
 MODULE_AUTHOR("Jinchao Wang");
 MODULE_DESCRIPTION("StackWatch Guard Test Cases");
@@ -27,8 +24,6 @@ static noinline void vulnerable_strcpy(const char *input)
 	char buffer[32]; /* Small buffer to trigger overflow */
 
 	pr_info("StackWatch Test: %s called with input: %s\n", __func__, input);
-
-	// hwbp_addr_test();
 
 	/* This will overflow if input > 32 chars */
 	strcpy(buffer, input);
@@ -155,7 +150,7 @@ static ssize_t test_proc_write(struct file *file, const char __user *buffer,
 		}
 	} else {
 		pr_err("StackWatch Test: Invalid command format\n");
-		pr_info("StackWatch Test: Usage: echo 'test[1-4] [param]' > /proc/stackwatch_test\n");
+		pr_info("StackWatch Test: Usage: echo 'test[1-4] [param]' > /proc/kstackwatch_test\n");
 		return -EINVAL;
 	}
 
@@ -173,12 +168,12 @@ static ssize_t test_proc_read(struct file *file, char __user *buffer,
 		"  test3 [depth] - Recursive corruption (default depth=3)\n"
 		"  test4	   - Safe function test (no corruption)\n"
 		"\n"
-		"Usage: echo 'test1 60' > /proc/stackwatch_test\n"
+		"Usage: echo 'test1 60' > /proc/kstackwatch_test\n"
 		"\n"
-		"Make sure to setup stackwatch_guard first:\n"
-		"  echo 'vulnerable_strcpy' > /proc/stackwatch_guard\n"
-		"  echo 'controlled_overflow' > /proc/stackwatch_guard\n"
-		"  echo 'recursive_vulnerable' > /proc/stackwatch_guard\n";
+		"Make sure to setup kstackwatch_guard first:\n"
+		"  echo 'vulnerable_strcpy' > /proc/kstackwatch_guard\n"
+		"  echo 'controlled_overflow' > /proc/kstackwatch_guard\n"
+		"  echo 'recursive_vulnerable' > /proc/kstackwatch_guard\n";
 
 	if (*pos > 0)
 		return 0;
@@ -198,27 +193,27 @@ static const struct proc_ops test_proc_ops = {
 	.proc_write = test_proc_write,
 };
 
-static int __init stackwatch_test_init(void)
+static int __init kstackwatch_test_init(void)
 {
-	test_proc = proc_create("stackwatch_test", 0644, NULL, &test_proc_ops);
+	test_proc = proc_create("kstackwatch_test", 0644, NULL, &test_proc_ops);
 	if (!test_proc) {
 		pr_err("StackWatch Test: Failed to create proc entry\n");
 		return -ENOMEM;
 	}
 
 	pr_info("StackWatch Test: Module loaded\n");
-	pr_info("StackWatch Test: Usage - cat /proc/stackwatch_test for instructions\n");
+	pr_info("StackWatch Test: Usage - cat /proc/kstackwatch_test for instructions\n");
 
 	return 0;
 }
 
-static void __exit stackwatch_test_exit(void)
+static void __exit kstackwatch_test_exit(void)
 {
 	if (test_proc)
-		remove_proc_entry("stackwatch_test", NULL);
+		remove_proc_entry("kstackwatch_test", NULL);
 
 	pr_info("StackWatch Test: Module unloaded\n");
 }
 
-module_init(stackwatch_test_init);
-module_exit(stackwatch_test_exit);
+module_init(kstackwatch_test_init);
+module_exit(kstackwatch_test_exit);

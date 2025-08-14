@@ -5,7 +5,7 @@
 
 #include <linux/stackprotector.h>
 #include <linux/kprobes.h>
-#include "stackwatch.h"
+#include "kstackwatch.h"
 
 /* Per-CPU monitoring state */
 static DEFINE_PER_CPU(int, monitor_depth);

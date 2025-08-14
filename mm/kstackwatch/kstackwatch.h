@@ -10,7 +10,6 @@
 
 /* Global state */
 extern char target_function[MAX_FUNC_NAME_LEN];
-extern bool monitoring_active;
 extern bool panic_on_corruption;
 
 /* Probe management - from core.c or separate probe.c if needed */

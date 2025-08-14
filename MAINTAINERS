@@ -23923,10 +23923,10 @@ L:	stable@vger.kernel.org
 S:	Supported
 F:	Documentation/process/stable-kernel-rules.rst
 
-STACK WATCH
+KERNEL STACK WATCH
 M:	Jinchao Wang <wangjinchao600@gmail.com>
 S:	Supported
-F:	mm/stackwatch/
+F:	mm/kstackwatch/
 
 STAGING - ATOMISP DRIVER
 M:	Hans de Goede <hansg@kernel.org>

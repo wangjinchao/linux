@@ -310,29 +310,23 @@ config PER_VMA_LOCK_STATS
 
 	  If in doubt, say N.
 
-config STACKWATCH
-	tristate "Stack Corruption Debugger"
+config KSTACK_WATCH
+	tristate "Kernel Stack Watch"
 	depends on STACKPROTECTOR && HAVE_HW_BREAKPOINT && KPROBES && HAVE_KRETPROBES
 	help
-	  Debug tool to detect stack corruption using hardware breakpoints.
-
-	  This tool identifies the exact instruction that corrupts stack canaries
-	  in real-time, providing precise debugging information for stack overflow
-	  vulnerabilities.
-
-	  Requires kprobes support for function entry/exit monitoring.
+	  This debugging tool monitors kernel stack usage. When enabled,
+	  it can detect potential stack overflows by watching the remaining
+	  stack space. This provides real-time warnings before a crash occurs,
+	  which is useful for debugging stability issues.
 
 	  If unsure, say N.
 
-config STACKWATCH_TEST
-	tristate "StackWatch Test Module"
-	depends on STACKWATCH
+config KSTACK_WATCH_TEST
+	tristate "KStackWatch Test Module"
+	depends on KSTACK_WATCH
 	help
-	  Test module for StackWatch functionality.
-
-	  This module provides controlled stack corruption scenarios
-	  to verify that StackWatch correctly detects corruption.
-
-	  Useful for development and validation.
+	  This module provides controlled stack exhaustion and overflow scenarios
+	  to verify the functionality of KStackWatch. It is particularly useful
+	  for development and validation of the stack watch mechanism.
 
 	  If unsure, say N.
