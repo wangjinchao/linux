@@ -11,29 +11,50 @@
 #include <linux/delay.h>
 #include <linux/sched.h>
 
+#include "kstackwatch.h"
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Jinchao Wang");
 MODULE_DESCRIPTION("Simplified KStackWatch Test Module ");
 
 static struct proc_dir_entry *test_proc;
 #define BUFFER_SIZE 4
+#define MAX_DEPTH 4
 
 /* Global variables for multi-thread test synchronization */
 static volatile u64 *g_corrupt_ptr;
 static struct completion g_wait_for_init;
 
 /*
+ * Test Case 0: Write to the canary position directly (Canary Test)
+ * This function uses a u64 buffer
+ * 64-bit write, corrupting the stack canary with a single operation.
+ */
+static void canary_test_write(void)
+{
+	u64 buffer[BUFFER_SIZE];
+
+	pr_info("KStackWatch Test: Starting canary_test_write with u64 write\n");
+	hwbp_addr_show();
+	hwbp_addr_test();
+
+	buffer[0] = 0;
+	/* make sure the compiler do not drop assign action */
+	barrier_data(buffer);
+	pr_info("KStackWatch Test: Canary write test completed\n");
+}
+
+/*
  * Test Case 1: Stack Overflow (Canary Test)
  * This function uses a u64 buffer
  * 64-bit write, corrupting the stack canary with a single operation.
  */
-static noinline void canary_test_overflow(const char *input)
+static void canary_test_overflow(void)
 {
-	u64 buffer[BUFFER_SIZE]; // 32 bytes
-	char buffer2[256]; /* not overflow this */
+	u64 buffer[BUFFER_SIZE];
 
-	strcpy(buffer2, input);
 	pr_info("KStackWatch Test: Starting canary_test_overflow with u64 write\n");
+	pr_info("KStackWatch Test: buffer 0x%px\n", buffer);
 
 	/* Intentionally overflow the u64 buffer. */
 	buffer[BUFFER_SIZE] = 0xdeadbeefdeadbeef;
@@ -41,56 +62,45 @@ static noinline void canary_test_overflow(const char *input)
 	/* make sure the compiler do not drop assign action */
 	barrier_data(buffer);
 
-	pr_info("KStackWatch Test: Canary test completed\n");
+	pr_info("KStackWatch Test: Canary overflow test completed\n");
 }
 
 /*
- * Thread B's function: Corrupts the variable on Thread A's stack
+ * Corrupts the variable on multi_thread_corruption_test's stack
  */
-static int corruption_thread_b(void *data)
+static int multi_thread_corruption_thread2(void *data)
 {
-	pr_info("KStackWatch Test: Thread B started, waiting for Thread A\n");
+	pr_info("KStackWatch Test: Starting multi_thread_corruption_thread2\n");
 
 	wait_for_completion(&g_wait_for_init);
 
-	pr_info("KStackWatch Test: Thread B woke up. Corrupting variable at %p\n",
+	pr_info("KStackWatch Test: Thread2  woke up. Corrupting variable at %px\n",
 		g_corrupt_ptr);
 	if (g_corrupt_ptr) {
 		*g_corrupt_ptr = 0xdeadbeefdeadbeef;
 	}
 
-	pr_info("KStackWatch Test: Thread B finished corruption\n");
+	pr_info("KStackWatch Test: Thread2 finished corruption\n");
 
 	return 0;
 }
 
 /*
  * Test Case 2: Multi-threaded Local Variable Corruption
- * Thread A initializes a local variable, makes its address globally available,
+ * multi_thread_corruption_test initializes a local variable
+ * makes its address globally available,
  * and then sleeps. Thread B corrupts it.
  */
-static noinline void local_var_corruption_test(void)
+static void multi_thread_corruption_thread1(void)
 {
 	u64 local_var = 0x1234567887654321;
-	struct task_struct *corrupt_thread;
 
-	pr_info("KStackWatch Test: Starting local_var_corruption_test (Thread A)\n");
+	pr_info("KStackWatch Test: Starting multi_thread_corruption_thread1\n");
 
-	/* Reset completion and global pointer */
-	init_completion(&g_wait_for_init);
-	g_corrupt_ptr = &local_var;
-
-	pr_info("KStackWatch Test: Thread A local_var address: %p, value: 0x%llx\n",
+	pr_info("KStackWatch Test: Thread A local_var address: %px, value: 0x%llx\n",
 		&local_var, local_var);
-	pr_info("KStackWatch Test: Starting Thread B\n");
 
-	corrupt_thread = kthread_run(corruption_thread_b, NULL, "corruption_b");
-	if (IS_ERR(corrupt_thread)) {
-		pr_err("KStackWatch Test: Failed to create corruption thread\n");
-		return;
-	}
-
-	/* Signal Thread B that the pointer is ready, then sleep */
+	/* Signal Thread 2 that the pointer is ready, then sleep */
 	complete(&g_wait_for_init);
 	msleep(1000);
 
@@ -98,21 +108,39 @@ static noinline void local_var_corruption_test(void)
 		local_var);
 }
 
+static void multi_thread_corruption_test(void)
+{
+	struct task_struct *corrupt_thread;
+
+	pr_info("KStackWatch Test: Starting multi_thread_corruption_test\n");
+
+	/* Reset completion */
+	init_completion(&g_wait_for_init);
+
+	corrupt_thread = kthread_run(multi_thread_corruption_thread2, NULL,
+				     "corruption_b");
+	if (IS_ERR(corrupt_thread)) {
+		pr_err("KStackWatch Test: Failed to create corruption thread\n");
+		return;
+	}
+	multi_thread_corruption_thread1();
+}
+
 /*
  * Test Case 3: Recursive Call Corruption
  * This function calls itself recursively and corrupts the stack at a specific depth.
  * This tests whether KStackWatch can handle dynamic stack frames.
  */
-static noinline void recursive_corruption_test(int depth)
+static void recursive_corruption_test(int depth)
 {
-	u64 buffer[BUFFER_SIZE]; // 32 bytes
+	u64 buffer[BUFFER_SIZE];
+
 
 	pr_info("KStackWatch Test: Recursive call at depth %d\n", depth);
-	if (depth > 0)
-		recursive_corruption_test(depth - 1);
+	if (depth <= MAX_DEPTH)
+		recursive_corruption_test(depth + 1);
 
-	/* Intentionally overflow the u64 buffer. */
-	buffer[BUFFER_SIZE] = 0xdeadbeefdeadbeef;
+	buffer[0] = depth;
 
 	/* make sure the compiler do not drop assign action */
 	barrier_data(buffer);
@@ -134,24 +162,27 @@ static ssize_t test_proc_write(struct file *file, const char __user *buffer,
 
 	cmd[count] = '\0';
 	strim(cmd);
-	char test_buffer[128];
 
 	pr_info("KStackWatch Test: Received command: %s\n", cmd);
 
 	if (sscanf(cmd, "test%d", &test_num) == 1) {
 		switch (test_num) {
+		case 0:
+			pr_info("KStackWatch Test: Triggering canary write test\n");
+			canary_test_write();
+			break;
 		case 1:
 			pr_info("KStackWatch Test: Triggering canary overflow test\n");
-			strcpy(test_buffer, "good buffer");
-			canary_test_overflow(test_buffer);
+			canary_test_overflow();
 			break;
 		case 2:
 			pr_info("KStackWatch Test: Triggering local variable corruption test\n");
-			local_var_corruption_test();
+			multi_thread_corruption_test();
 			break;
 		case 3:
 			pr_info("KStackWatch Test: Triggering recursive corruption test\n");
-			recursive_corruption_test(5);
+			/* depth start with 0 */
+			recursive_corruption_test(0);
 			break;
 		default:
 			pr_err("KStackWatch Test: Unknown test number %d\n",
@@ -173,7 +204,8 @@ static ssize_t test_proc_read(struct file *file, char __user *buffer,
 		"KStackWatch Simplified Test Module \n"
 		"==================================\n"
 		"Usage:\n"
-		"  echo 'test1' > /proc/kstackwatch_test  - Canary test\n"
+		"  echo 'test0' > /proc/kstackwatch_test  - Canary test test\n"
+		"  echo 'test1' > /proc/kstackwatch_test  - Canary overflow test\n"
 		"  echo 'test2' > /proc/kstackwatch_test  - Multi-threaded local variable corruption test\n"
 		"  echo 'test3' > /proc/kstackwatch_test  - Recursive corruption test\n";
 

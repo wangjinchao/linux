@@ -1,0 +1,132 @@
+#!/bin/bash
+
+# --- Usage function ---
+usage() {
+    echo "======================================"
+    echo "  KStackWatch Test Script Usage"
+    echo "======================================"
+    echo ""
+    echo "IMPORTANT: Before running, make sure you have updated the offset values!"
+    echo ""
+    echo "To find your offsets, use objdump:"
+    echo "  objdump -S --disassemble=canary_test_write vmlinux"
+    echo ""
+    echo "Then search for your function names to find the instruction addresses."
+    echo "- Instruction offset: address relative to function's start"
+    echo "- Stack var offset: distance from stack base (%rbp) to the variable"
+    echo ""
+    echo "Usage: $0 [test_case_number]"
+    echo ""
+    echo "Available test cases:"
+    echo "  0  - Canary Write Test"
+    echo "  1  - Canary Overflow Test"
+    echo "  2  - Multi-threaded Local Variable Corruption Test"
+    echo "  3  - Recursive Corruption Test"
+    echo ""
+    echo "======================================"
+    echo ""
+}
+
+# --- Interactive menu ---
+show_menu() {
+    echo "Select a test case to run:"
+    echo "  0) Canary Write Test"
+    echo "  1) Canary Overflow Test"
+    echo "  2) Multi-threaded Local Variable Corruption Test"
+    echo "  3) Recursive Corruption Test"
+    echo "  q) Quit"
+    echo ""
+    echo "WARNING: Each test may cause system crash/hang!"
+    echo ""
+    read -p "Enter your choice [0-3/q]: " choice
+    echo ""
+
+    case "$choice" in
+        0) test0 ;;
+        1) test1 ;;
+        2) test2 ;;
+        3) test3 ;;
+        q|Q) echo "Exiting..."; exit 0 ;;
+        *) echo "Invalid choice. Please try again."; echo ""; show_menu ;;
+    esac
+}
+
+# --- Test Case 0: Canary Write ---
+test0() {
+    echo "=== Running Test Case 0: Canary Write ==="
+    FUNCTION=canary_test_write
+    INSTRUCTION_OFFSET="0x19"
+    echo "${FUNCTION}+${INSTRUCTION_OFFSET}" > /proc/kstackwatch
+    echo "test0" > /proc/kstackwatch_test
+    echo ""
+    echo "-------------------------------------"
+    read -p "Press Enter to continue..."
+    echo ""
+}
+
+# --- Test Case 1: Canary Overflow ---
+test1() {
+    echo "=== Running Test Case 1: Canary Overflow ==="
+    FUNCTION=canary_test_overflow
+    INSTRUCTION_OFFSET="0x19"
+    echo "${FUNCTION}+${INSTRUCTION_OFFSET}" > /proc/kstackwatch
+    echo "test1" > /proc/kstackwatch_test
+    echo ""
+    echo "-------------------------------------"
+    read -p "Press Enter to continue..."
+    echo ""
+}
+
+# --- Test Case 2: Multi-threaded Local Variable Corruption ---
+test2() {
+    echo "=== Running Test Case 2: Multi-threaded Corruption ==="
+    FUNCTION=multi_thread_corruption_thread1
+    INSTRUCTION_OFFSET="0x26"
+    STACK_OFFSET="-0x10"
+    WRITE_SIZE="8"
+    echo "${FUNCTION}+${INSTRUCTION_OFFSET} ${STACK_OFFSET}:${WRITE_SIZE}" > /proc/kstackwatch
+    echo "test2" > /proc/kstackwatch_test
+    echo ""
+    echo "-------------------------------------"
+    read -p "Press Enter to continue..."
+    echo ""
+}
+
+# --- Test Case 3: Recursive Corruption ---
+test3() {
+    echo "=== Running Test Case 3: Recursive Corruption ==="
+    FUNCTION=recursive_corruption_test
+    INSTRUCTION_OFFSET="0x1d"
+    STACK_OFFSET="-0x30"
+    WRITE_SIZE="8"
+    echo "${FUNCTION}+${INSTRUCTION_OFFSET} ${STACK_OFFSET}:${WRITE_SIZE}" > /proc/kstackwatch
+    echo "test3" > /proc/kstackwatch_test
+    echo ""
+    echo "-------------------------------------"
+    read -p "Press Enter to continue..."
+    echo ""
+}
+
+# --- Run all tests ---
+# Removed: These tests cause system crashes and should not be run sequentially
+
+# --- Main ---
+if [ -z "$1" ]; then
+    usage
+    echo ""
+    show_menu
+else
+    case "$1" in
+        0) test0 ;;
+        1) test1 ;;
+        2) test2 ;;
+        3) test3 ;;
+        help|--help|-h) usage ;;
+        *)
+            echo "Error: Invalid argument '$1'"
+            echo ""
+            usage
+            exit 1
+            ;;
+    esac
+fi

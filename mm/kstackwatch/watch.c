@@ -3,6 +3,7 @@
  * Hardware breakpoint management for KStackWatch (enhanced multi-watch support)
  */
 
+#include "linux/printk.h"
 #include <linux/kprobes.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/perf_event.h>
@@ -11,6 +12,7 @@
 #include <linux/slab.h>
 #include <asm/hw_breakpoint.h>
 #include <linux/stacktrace.h>
+#include <linux/delay.h>
 
 #include "kstackwatch.h"
 
@@ -59,6 +61,7 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 			 struct pt_regs *regs)
 {
 	unsigned long entries[MAX_STACK_ENTRIES];
+	int saved_loglevel;
 	int i, nr = 0;
 
 	kstackwatch_resolve_trampolines();
@@ -67,22 +70,23 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 	nr = stack_trace_save_regs(regs, entries, MAX_STACK_ENTRIES, 0);
 	for (i = 0; i < nr; i++) {
 		if (kstackwatch_should_ignore(entries[i])) {
-			pr_debug(
-				"KStackWatch: Found rethook trampolines, ignoring hit\n");
+			pr_info("KStackWatch: Found rethook trampolines, ignoring hit\n");
 			return;
 		}
 	}
 #endif
-
+	saved_loglevel = console_loglevel;
+	console_loglevel = CONSOLE_LOGLEVEL_MOTORMOUTH;
 	pr_emerg("========== KStackWatch: Caught stack corruption =======\n");
 	show_config();
 	show_regs(regs);
-	pr_emerg("========== KStackWatch Triggered: End ==========\n");
+	pr_emerg("========== KStackWatch End ==========\n");
+	mdelay(100);
+	console_loglevel = saved_loglevel;
 
 	if (panic_on_corruption)
 		panic("KStackWatch: Stack corruption detected");
 }
-
 
 /* Setup single hardware breakpoint on current CPU */
 static void setup_hwbp_on_local_cpu(void *useless)
@@ -110,10 +114,9 @@ static void setup_hwbp_on_local_cpu(void *useless)
 	}
 
 	if (bp->attr.bp_addr == (unsigned long)&marker) {
-		pr_debug("KStackWatch: HWBP disarmed on CPU %d\n", cpu);
+		pr_info("KStackWatch: HWBP disarmed on CPU %d\n", cpu);
 	} else {
-		pr_debug(
-			"KStackWatch: HWBP armed on CPU %d at 0x%p ( len %llu)\n",
+		pr_info("KStackWatch: HWBP armed on CPU %d at 0x%px ( len %llu)\n",
 			cpu, (void *)bp->attr.bp_addr, bp->attr.bp_len);
 	}
 }
@@ -166,14 +169,8 @@ int hwbp_init(void)
 /* Cleanup hardware breakpoint  */
 void hwbp_cleanup(void)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&hwbp_lock, flags);
-
 	unregister_wide_hw_breakpoint(hwbp_events);
 	hwbp_events = NULL;
-
-	spin_unlock_irqrestore(&hwbp_lock, flags);
 
 	pr_info("KStackWatch: HWBP  cleaned up\n");
 }
@@ -215,9 +212,8 @@ int hwbp_arm_all(u64 watch_addr, u64 watch_len)
 
 	/* Then install on all CPUs */
 	/* Run on current CPU directly */
-	setup_hwbp_on_local_cpu(NULL);
-
 	queue_work(system_highpri_wq, &myworker.work);
+	setup_hwbp_on_local_cpu(NULL);
 	return 0;
 }
 
@@ -234,7 +230,7 @@ void hwbp_addr_show(void)
 	struct perf_event *bp;
 
 	bp = *this_cpu_ptr(hwbp_events);
-	pr_info("KStackWatch: HWBP info test - bp_addr: 0x%p len:%llu\n",
+	pr_info("KStackWatch: HWBP info test - bp_addr: 0x%px len:%llu\n",
 		(void *)bp->attr.bp_addr, bp->attr.bp_len);
 }
 

@@ -22,7 +22,7 @@ struct kstackwatch_config {
 	enum watch_type type;
 	char function[MAX_FUNC_NAME_LEN];
 	u64 instruction_offset;
-	
+
 	// save to show
 	char type_str[MAX_TYPE_STR_LEN];
 
@@ -49,9 +49,5 @@ void hwbp_disarm_all(void);
 void hwbp_addr_show(void);
 void hwbp_addr_test(void);
 
-	/* Stack analysis functions */
-	unsigned long find_canary_address(struct pt_regs *regs);
-unsigned long resolve_stack_offset(struct pt_regs *regs, u64 offset);
-int validate_stack_address(unsigned long addr, size_t size);
 
 #endif /* _STACKWATCH_H */

@@ -10,7 +10,7 @@
 #include "kstackwatch.h"
 
 MODULE_AUTHOR("Jinchao Wang");
-MODULE_DESCRIPTION("Stack Corruption Debugger with Offset Support");
+MODULE_DESCRIPTION("Kernel Stack Watch");
 MODULE_LICENSE("GPL");
 
 /* Global state */
@@ -26,7 +26,7 @@ MODULE_PARM_DESC(panic_on_corruption,
 void show_config(void)
 {
 	struct kstackwatch_config *config = &global_config;
-	pr_info("KStackWatch: watch config %s+0x%llx %s\n", config->function,
+	printk("KStackWatch: watch config %s+0x%llx %s\n", config->function,
 		config->instruction_offset, config->type_str);
 }
 

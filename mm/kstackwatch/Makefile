@@ -3,5 +3,8 @@
 obj-$(CONFIG_KSTACK_WATCH)	+= kstackwatch.o
 obj-$(CONFIG_KSTACK_WATCH_TEST)	+= kstackwatch_test.o
 
-kstackwatch-y := core.o stack.o watch.o
-CFLAGS_kstackwatch_test.o = -O1
+kstackwatch-y := kernel.o stack.o watch.o
+CFLAGS_kstackwatch_test.o := -fno-ipa-sra -fno-inline \
+                             -fno-optimize-sibling-calls \
+                             -fno-section-anchors \
+                             -fno-pic -fno-pie
