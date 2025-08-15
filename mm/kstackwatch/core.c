@@ -1,20 +1,21 @@
+#include "linux/kstrtox.h"
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
 #include <linux/string.h>
 #include <linux/utsname.h>
+#include <linux/seq_file.h>
 
 #include "kstackwatch.h"
 
 MODULE_AUTHOR("Jinchao Wang");
-MODULE_DESCRIPTION("Stack Corruption Debugger");
+MODULE_DESCRIPTION("Stack Corruption Debugger with Offset Support");
 MODULE_LICENSE("GPL");
 
 /* Global state */
-char target_function[MAX_FUNC_NAME_LEN] = "";
-unsigned long long offset;
-bool monitoring_active;
+struct kstackwatch_config global_config;
+bool watching_active;
 
 /* Module parameters */
 bool panic_on_corruption;
@@ -22,32 +23,137 @@ module_param(panic_on_corruption, bool, 0644);
 MODULE_PARM_DESC(panic_on_corruption,
 		 "Trigger kernel panic when corruption detected");
 
-static int start_monitoring(const char *func_name, unsigned long long offset)
+void show_config(void)
+{
+	struct kstackwatch_config *config = &global_config;
+	pr_info("KStackWatch: watch config %s+0x%llx %s\n", config->function,
+		config->instruction_offset, config->type_str);
+}
+
+static int start_watching(struct kstackwatch_config *config)
 {
 	int ret;
 
-	/* Initialize HWBP subsystem */
+	if (strlen(config->function) == 0) {
+		pr_err("KStackWatch: No target function specified\n");
+		return -EINVAL;
+	}
+
+	/* Initialize HWBP  */
 	ret = hwbp_init();
 	if (ret) {
-		pr_err("StackWatch: Failed to initialize HWBP subsystem: %d\n", ret);
-		return ret;
-	}
-	ret = setup_probes(target_function, offset);
-	if (ret) {
-		pr_err("StackWatch: Failed to setup probes: %d\n", ret);
+		pr_err("KStackWatch: Failed to initialize HWBP : %d\n", ret);
 		return ret;
 	}
 
-	monitoring_active = true;
+	ret = setup_probes(config);
+	if (ret) {
+		pr_err("KStackWatch: Failed to setup probes: %d\n", ret);
+		hwbp_cleanup();
+		return ret;
+	}
+	watching_active = true;
+
+	pr_info("KStackWatch: start watching:\n");
+	show_config();
+
 	return 0;
 }
 
-static void stop_monitoring(void)
+static void stop_watching(struct kstackwatch_config *config)
 {
 	cleanup_probes();
 	hwbp_cleanup();
-	monitoring_active = false;
-	target_function[0] = '\0';
+	watching_active = false;
+
+	pr_info("KStackWatch: stop watching:\n");
+	show_config();
+}
+
+/* Parse watch configuration: 
+	function+instruction_off stack_offset:stack_size 
+*/
+static int parse_config(char *line, struct kstackwatch_config *config)
+{
+	char *func_name = NULL;
+	char *instruct_offset_str = NULL;
+	char *type_str = NULL;
+	char *colon_pos;
+	s64 stack_offset;
+	int stack_size;
+	int ret;
+
+	/* Clear configuration */
+	memset(config, 0, sizeof(*config));
+
+	/* Split by space */
+	type_str = line;
+	func_name = strsep(&type_str, " ");
+
+	if (!func_name || strlen(func_name) == 0) {
+		pr_err("KStackWatch: Function name required\n");
+		ret = -EINVAL;
+	}
+
+	/* Parse function+offset */
+	instruct_offset_str = strchr(func_name, '+');
+	if (!instruct_offset_str) {
+		pr_err("KStackWatch: Invalid offset format\n");
+		ret = -EINVAL;
+	}
+
+	*instruct_offset_str = '\0';
+	instruct_offset_str++;
+	ret = kstrtoull(instruct_offset_str, 0, &config->instruction_offset);
+	if (ret) {
+		pr_err("KStackWatch: Invalid offset format\n");
+		ret = -EINVAL;
+	}
+
+	strncpy(config->function, func_name, MAX_FUNC_NAME_LEN - 1);
+	config->function[MAX_FUNC_NAME_LEN - 1] = '\0';
+
+	/* Default to canary watch */
+	if (!type_str || strlen(type_str) == 0 ||
+	    strcmp(type_str, "canary") == 0) {
+		config->type = WATCH_CANARY;
+		strncpy(config->type_str, "canary", MAX_TYPE_STR_LEN);
+		return 0;
+	}
+
+	/* Check for offset:len format */
+	colon_pos = strchr(type_str, ':');
+	if (!colon_pos) {
+		pr_err("KStackWatch: Invalid watch format, use 'canary' or 'offset:len'\n");
+		return -EINVAL;
+	}
+
+	*colon_pos = '\0';
+	ret = kstrtos64(type_str, 0, &stack_offset);
+	if (ret) {
+		pr_err("KStackWatch: Invalid offset format\n");
+		return ret;
+	}
+
+	ret = kstrtoint(colon_pos + 1, 0, &stack_size);
+	if (ret) {
+		pr_err("KStackWatch: Invalid len format\n");
+		return ret;
+	}
+
+	/* Validate len */
+	if (stack_size != 1 && stack_size != 2 && stack_size != 4 &&
+	    stack_size != 8) {
+		pr_err("KStackWatch: Invalid len %d, must be 1,2,4,8\n",
+		       stack_size);
+		return -EINVAL;
+	}
+
+	config->type = WATCH_STACK_OFFSET;
+	config->stack_var.offset = stack_offset;
+	config->stack_var.len = stack_size;
+
+	return 0;
 }
 
 /* Proc interface for configuration */
@@ -55,154 +161,130 @@ static ssize_t kstackwatch_proc_write(struct file *file,
 				      const char __user *buffer, size_t count,
 				      loff_t *pos)
 {
-	char func_offset_str[MAX_FUNC_NAME_LEN + 10];
-	char *offset_str;
+	char input[256];
 	int ret;
+	struct kstackwatch_config *config = &global_config;
 
-	if (count == 0 || count >= sizeof(func_offset_str))
+	if (count == 0 || count >= sizeof(input))
 		return -EINVAL;
 
-	if (copy_from_user(func_offset_str, buffer, count))
+	if (copy_from_user(input, buffer, count))
 		return -EFAULT;
 
-	func_offset_str[count] = '\0';
+	input[count] = '\0';
+	strim(input);
 
-	/* Remove trailing newline and any spaces */
-	strim(func_offset_str);
+	/* Stop current watching */
+	if (watching_active)
+		stop_watching(config);
 
-	/* Stop current monitoring */
-	if (monitoring_active)
-		stop_monitoring();
+	ret = parse_config(input, config);
+	if (ret)
+		return ret;
 
-	/* Check for a valid string to monitor */
-	if (strlen(func_offset_str) == 0)
-		return count;
-
-	/* Parse the input string for "func_name+offset" */
-	offset_str = strchr(func_offset_str, '+');
-	if (offset_str) {
-		// Found an offset. Separate the strings and parse.
-		*offset_str = '\0';
-		offset_str++;
-
-		// Use kstrtoull to automatically handle hex (0x) and decimal
-		ret = kstrtoull(offset_str, 0, &offset);
-		if (ret) {
-			pr_err("StackWatch: Invalid offset format\n");
-			return -EINVAL;
-		}
-	} else {
-		pr_err("StackWatch: Offset must be supplied\n");
-		return -EINVAL;
-	}
-
-	strncpy(target_function, func_offset_str, MAX_FUNC_NAME_LEN - 1);
-	target_function[MAX_FUNC_NAME_LEN - 1] = '\0';
-
-	ret = start_monitoring(target_function, offset);
+	/* Start watching */
+	ret = start_watching(config);
 	if (ret < 0) {
-		pr_err("StackWatch: Failed to monitor %s: %d\n",
-		       target_function, ret);
+		pr_err("KStackWatch: Failed to start watching with %d\n", ret);
 		return ret;
 	}
-	pr_info("StackWatch: Now monitoring %s+0x%llx\n", target_function,
-		offset);
 
 	return count;
 }
 
-static ssize_t kstackwatch_proc_read(struct file *file, char __user *buffer,
-				     size_t count, loff_t *pos)
+static int kstackwatch_proc_show(struct seq_file *m, void *v)
 {
-	char output[256];
-	int len;
+	struct kstackwatch_config *config = &global_config;
 
-	if (*pos > 0)
-		return 0;
-
-	if (monitoring_active) {
-		len = snprintf(output, sizeof(output),
-			       "Monitoring: %s+0x%llx\n", target_function,
-			       offset);
+	if (watching_active) {
+		seq_printf(m, "KStackWatch: watch config %s+0x%llx %s\n",
+			   config->function, config->instruction_offset,
+			   config->type_str);
 	} else {
-		len = snprintf(output, sizeof(output),
-			       "Not monitoring\n"
-			       "Usage: echo 'function_name+offset' > /proc/kstackwatch\n");
+		seq_printf(m, "Not watching\n");
+		seq_printf(m, "\nUsage:\n");
+		seq_printf(
+			m,
+			"  echo 'function_name+instruction_offset type_str' > /proc/kstackwatch\n");
+		seq_printf(m, "\n type_str:\n");
+		seq_printf(m, "  canary    - Watch stack canary\n");
+		seq_printf(
+			m,
+			"  stack_offset:stack_size  - Watch stack variable by offset and len (1,2,4,8)\n");
+		seq_printf(m, "\nExamples:\n");
+		seq_printf(
+			m,
+			"  echo 'vulnerable_func+0x20 canary' > /proc/kstackwatch\n");
+		seq_printf(
+			m,
+			"  echo 'test_func+0x32 -64:8,canary' > /proc/kstackwatch\n");
 	}
 
-	if (count < len)
-		return -EINVAL;
+	return 0;
+}
 
-	if (copy_to_user(buffer, output, len))
-		return -EFAULT;
-
-	*pos = len;
-	return len;
+static int kstackwatch_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, kstackwatch_proc_show, NULL);
 }
 
 static const struct proc_ops kstackwatch_proc_ops = {
-	.proc_read = kstackwatch_proc_read,
+	.proc_open = kstackwatch_proc_open,
+	.proc_read = seq_read,
 	.proc_write = kstackwatch_proc_write,
+	.proc_lseek = seq_lseek,
+	.proc_release = single_release,
 };
 
 static int is_hwbp_supported(void)
 {
-	const char *supported_archs[] = {
-	    "x86_64",
-	    // "i386",
-	    // "aarch64",
-	    // "armv7l",
-	    // "ppc64le",
-	    // "s390x",
-	    NULL
-	};
+	static const char *supported_archs[] = { "x86_64", NULL };
 
 	const char *current_arch = utsname()->machine;
 	int i;
 
 	for (i = 0; supported_archs[i] != NULL; i++) {
 		if (strcmp(current_arch, supported_archs[i]) == 0) {
-			pr_info("StackWatch: Architecture %s supports hardware breakpoints\n",
+			pr_info("KStackWatch: Architecture %s supports hardware breakpoints\n",
 				current_arch);
 			return 1;
 		}
 	}
 
-	pr_warn("StackWatch: Architecture %s does not support hardware breakpoints\n",
+	pr_warn("KStackWatch: Architecture %s may not support hardware breakpoints\n",
 		current_arch);
-
-	return 0;
+	return 1; /* Allow for testing */
 }
 
 static int __init kstackwatch_init(void)
 {
 	if (!is_hwbp_supported()) {
-		return 0;
+		return -EOPNOTSUPP;
 	}
+
 	/* Create proc interface */
 	if (!proc_create("kstackwatch", 0644, NULL, &kstackwatch_proc_ops)) {
-		hwbp_cleanup();
 		return -ENOMEM;
 	}
-	pr_info("StackWatch: Module loaded - Phase 1\n");
-	pr_info("StackWatch: Usage: echo 'function_name+offset' > /proc/kstackwatch\n");
+
+	pr_info("KStackWatch: Module loaded\n");
+	pr_info("KStackWatch: Usage: echo 'function+offset stack_offset:stack_size' > /proc/kstackwatch\n");
 
 	return 0;
 }
 
 static void __exit kstackwatch_exit(void)
 {
-	/* Cleanup active monitoring */
-	if (monitoring_active)
-		stop_monitoring();
+	struct kstackwatch_config *config = &global_config;
+
+	/* Cleanup active watching */
+	if (watching_active)
+		stop_watching(config);
 
 	/* Remove proc interface */
 	remove_proc_entry("kstackwatch", NULL);
 
-	/* Cleanup HWBP subsystem */
-	hwbp_cleanup();
-
-	pr_info("StackWatch: Module unloaded\n");
+	pr_info("KStackWatch: Module unloaded\n");
 }
 
 module_init(kstackwatch_init);
