@@ -23927,7 +23927,7 @@ KERNEL STACK WATCH
 M:	Jinchao Wang <wangjinchao600@gmail.com>
 S:	Supported
 F:	mm/kstackwatch/
-F:	tool/kstackwatch/
+F:	tools/kstackwatch/
 
 STAGING - ATOMISP DRIVER
 M:	Hans de Goede <hansg@kernel.org>
