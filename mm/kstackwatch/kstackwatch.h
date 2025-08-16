@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#ifndef _STACKWATCH_H
-#define _STACKWATCH_H
+#ifndef _KSTACKWATCH_H
+#define _KSTACKWATCH_H
 
 #include <linux/kprobes.h>
 #include <linux/perf_event.h>
@@ -12,8 +12,8 @@
 
 /* Watch target types */
 enum watch_type {
-	WATCH_CANARY = 0, /* Original canary watching */
-	WATCH_STACK_VAR, /* Stack offset from frame base */
+	WATCH_CANARY = 0, /* canary placed by compiler */
+	WATCH_LOCAL_VAR, /* local var defined by code */
 };
 
 /* Single watch configuration */
@@ -23,30 +23,37 @@ struct kstackwatch_config {
 	u16 instruction_offset;
 	u16 depth;
 
-	/* stack part */
-	u16 stack_var_offset; /* Offset from rsp  */
-	u16 stack_var_len; /* Watch size (1,2,4,8 bytes) */
+	/* stack part, useless for canary watch */
+	/* offset from rsp at function+instruction_offset */
+	u16 local_var_offset;
 
+	/*
+	 * local var size (1,2,4,8 bytes)
+	 * it will be the watching len
+	 */
+	u16 local_var_len;
+
+	/* easy for understand*/
 	enum watch_type type;
 
-	// save to show
+	/* save to show */
 	char config_str[MAX_CONFIG_STR_LEN];
 };
 
 /* Global state */
-extern bool panic_on_corruption;
-void show_config(void);
+extern bool panic_on_catch;
+void ksw_show_config(void);
 
-/* Probe management */
-int setup_probes(struct kstackwatch_config *config);
-void cleanup_probes(void);
+/* stack management */
+int ksw_stack_init(struct kstackwatch_config *config);
+void ksw_stack_exit(void);
 
-/* HWBP management */
-int hwbp_init(void);
-void hwbp_cleanup(void);
-int hwbp_arm_all(u64 watch_addr, u64 watch_len);
-void hwbp_disarm_all(void);
-void hwbp_addr_show(void);
-void hwbp_addr_test(void);
+/* watch management */
+int ksw_watch_init(void);
+void ksw_watch_exit(void);
+int ksw_watch_on(u64 watch_addr, u64 watch_len);
+void ksw_watch_off(void);
+void ksw_watch_show(void);
+void ksw_watch_test(void);
 
-#endif /* _STACKWATCH_H */
+#endif /* _KSTACKWATCH_H */

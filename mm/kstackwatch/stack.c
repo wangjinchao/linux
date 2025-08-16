@@ -37,7 +37,7 @@ static unsigned long find_canary_address(struct pt_regs *regs)
 }
 
 /* Resolve stack offset to actual address */
-static unsigned long resolve_stack_offset(struct pt_regs *regs, s64 stack_var_offset)
+static unsigned long resolve_stack_offset(struct pt_regs *regs, s64 local_var_offset)
 {
 	unsigned long stack_base;
 	unsigned long target_addr;
@@ -47,10 +47,10 @@ static unsigned long resolve_stack_offset(struct pt_regs *regs, s64 stack_var_of
 
 	/* Use stack pointer as base for offset calculation */
 	stack_base = regs->sp;
-	target_addr = stack_base + stack_var_offset;
+	target_addr = stack_base + local_var_offset;
 
 	pr_info("KStackWatch: resolve_stack_offset sp:0x%lx offset: %llx, target: 0x%lx\n",
-		stack_base, stack_var_offset, target_addr);
+		stack_base, local_var_offset, target_addr);
 
 	return target_addr;
 }
@@ -90,18 +90,18 @@ static int parse_watch_info(struct pt_regs *regs,
 		len = 8;
 		break;
 
-	case WATCH_STACK_VAR:
-		addr = resolve_stack_offset(regs, config->stack_var_offset);
+	case WATCH_LOCAL_VAR:
+		addr = resolve_stack_offset(regs, config->local_var_offset);
 		if (!addr) {
 			pr_err("KStackWatch: Invalid stack var offset %u\n",
-			       config->stack_var_offset);
+			       config->local_var_offset);
 			return -EINVAL;
 		}
-		if (validate_stack_address(addr, config->stack_var_len)) {
+		if (validate_stack_address(addr, config->local_var_len)) {
 			pr_err("KStackWatch: Invalid stack var len %u\n",
-			       config->stack_var_len);
+			       config->local_var_len);
 		}
-		len = config->stack_var_len;
+		len = config->local_var_len;
 		break;
 
 	default:
@@ -144,7 +144,7 @@ static void entry_handler(struct kprobe *p, struct pt_regs *regs,
 		pr_err("KStackWatch: Failed to parse watch info: %d\n", ret);
 		return;
 	}
-	ret = hwbp_arm_all(watch_addr, watch_len);
+	ret = ksw_watch_on(watch_addr, watch_len);
 	if (ret) {
 		pr_err("KStackWatch: Failed to arm hwbp: %d\n", ret);
 		return;
@@ -167,13 +167,13 @@ static int exit_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 		return 0;
 	}
 
-	hwbp_disarm_all();
+	ksw_watch_off();
 	pr_info("KStackWatch: Disarmed for %s\n", probe_config->function);
 
 	return 0;
 }
 
-int setup_probes(struct kstackwatch_config *config)
+int ksw_stack_init(struct kstackwatch_config *config)
 {
 	int ret;
 	int cpu;
@@ -213,7 +213,7 @@ int setup_probes(struct kstackwatch_config *config)
 	return 0;
 }
 
-void cleanup_probes(void)
+void ksw_stack_exit(void)
 {
 	unregister_kretprobe(&exit_probe);
 	unregister_kprobe(&entry_probe);

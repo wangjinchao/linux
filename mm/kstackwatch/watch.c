@@ -78,13 +78,13 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 	saved_loglevel = console_loglevel;
 	console_loglevel = CONSOLE_LOGLEVEL_MOTORMOUTH;
 	pr_emerg("========== KStackWatch: Caught stack corruption =======\n");
-	show_config();
+	ksw_show_config();
 	show_regs(regs);
 	pr_emerg("========== KStackWatch End ==========\n");
 	mdelay(100);
 	console_loglevel = saved_loglevel;
 
-	if (panic_on_corruption)
+	if (panic_on_catch)
 		panic("KStackWatch: Stack corruption detected");
 }
 
@@ -142,7 +142,7 @@ static void setup_hwbp_work_fn(struct work_struct *work)
 }
 
 /* Initialize hardware breakpoint  */
-int hwbp_init(void)
+int ksw_watch_init(void)
 {
 	struct perf_event_attr attr;
 
@@ -167,7 +167,7 @@ int hwbp_init(void)
 }
 
 /* Cleanup hardware breakpoint  */
-void hwbp_cleanup(void)
+void ksw_watch_exit(void)
 {
 	unregister_wide_hw_breakpoint(hwbp_events);
 	hwbp_events = NULL;
@@ -176,7 +176,7 @@ void hwbp_cleanup(void)
 }
 
 /* Legacy API: Arm single hardware breakpoint (backward compatibility) */
-int hwbp_arm_all(u64 watch_addr, u64 watch_len)
+int ksw_watch_on(u64 watch_addr, u64 watch_len)
 {
 	struct perf_event *bp;
 	unsigned long flags;
@@ -217,15 +217,15 @@ int hwbp_arm_all(u64 watch_addr, u64 watch_len)
 	return 0;
 }
 
-void hwbp_disarm_all(void)
+void ksw_watch_off(void)
 {
 	pr_info("KStackWatch: Disarming all HWBPs\n");
-	hwbp_arm_all((unsigned long)&marker, sizeof(marker));
+	ksw_watch_on((unsigned long)&marker, sizeof(marker));
 	pr_info("KStackWatch: All HWBPs disarmed\n");
 }
 
 /* Debug functions */
-void hwbp_addr_show(void)
+void ksw_watch_show(void)
 {
 	struct perf_event *bp;
 
@@ -234,7 +234,7 @@ void hwbp_addr_show(void)
 		(void *)bp->attr.bp_addr, bp->attr.bp_len);
 }
 
-void hwbp_addr_test(void)
+void ksw_watch_test(void)
 {
 	struct perf_event *bp;
 	char *ptr;

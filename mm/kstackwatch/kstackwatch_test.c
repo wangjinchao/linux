@@ -35,8 +35,8 @@ static void canary_test_write(void)
 	u64 buffer[BUFFER_SIZE];
 
 	pr_info("KStackWatch Test: Starting canary_test_write with u64 write\n");
-	hwbp_addr_show();
-	hwbp_addr_test();
+	ksw_watch_show();
+	ksw_watch_test();
 
 	buffer[0] = 0;
 	/* make sure the compiler do not drop assign action */

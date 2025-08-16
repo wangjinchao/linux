@@ -18,12 +18,12 @@ struct kstackwatch_config global_config;
 bool watching_active;
 
 /* Module parameters */
-bool panic_on_corruption;
-module_param(panic_on_corruption, bool, 0644);
-MODULE_PARM_DESC(panic_on_corruption,
+bool panic_on_catch;
+module_param(panic_on_catch, bool, 0644);
+MODULE_PARM_DESC(panic_on_catch,
 		 "Trigger kernel panic when corruption detected");
 
-void show_config(void)
+void ksw_show_config(void)
 {
 	struct kstackwatch_config *config = &global_config;
 	printk("KStackWatch: watch config %s\n", config->config_str);
@@ -39,38 +39,38 @@ static int start_watching(struct kstackwatch_config *config)
 	}
 
 	/* Initialize HWBP  */
-	ret = hwbp_init();
+	ret = ksw_watch_init();
 	if (ret) {
 		pr_err("KStackWatch: Failed to initialize HWBP : %d\n", ret);
 		return ret;
 	}
 
-	ret = setup_probes(config);
+	ret = ksw_stack_init(config);
 	if (ret) {
 		pr_err("KStackWatch: Failed to setup probes: %d\n", ret);
-		hwbp_cleanup();
+		ksw_watch_exit();
 		return ret;
 	}
 	watching_active = true;
 
 	pr_info("KStackWatch: start watching:\n");
-	show_config();
+	ksw_show_config();
 
 	return 0;
 }
 
 static void stop_watching(struct kstackwatch_config *config)
 {
-	cleanup_probes();
-	hwbp_cleanup();
+	ksw_stack_exit();
+	ksw_watch_exit();
 	watching_active = false;
 
 	pr_info("KStackWatch: stop watching:\n");
-	show_config();
+	ksw_show_config();
 }
 
 /* Parse watch configuration: 
-*    function+instruction_off[+depth] [stack_var_offset:stack_var_len]
+*    function+instruction_off[+depth] [local_var_offset:local_var_len]
 */
 static int parse_config(char *buf, struct kstackwatch_config *config)
 {
@@ -113,14 +113,14 @@ static int parse_config(char *buf, struct kstackwatch_config *config)
 		return 0;
 
 	/* 2. Parse the optional stack part: offset:len */
-	config->type = WATCH_STACK_VAR;
+	config->type = WATCH_LOCAL_VAR;
 	token = strsep(&stack_part, ":");
-	if (!token || kstrtou16(token, 0, &config->stack_var_offset)) {
+	if (!token || kstrtou16(token, 0, &config->local_var_offset)) {
 		pr_err("KStackWatch: Failed to parse stack variable offset\n");
 		return -EINVAL;
 	}
 
-	if (!stack_part || kstrtou16(stack_part, 0, &config->stack_var_len)) {
+	if (!stack_part || kstrtou16(stack_part, 0, &config->local_var_len)) {
 		pr_err("KStackWatch: Failed to parse stack variable length\n");
 		return -EINVAL;
 	}
@@ -176,7 +176,7 @@ static int kstackwatch_proc_show(struct seq_file *m, void *v)
 		seq_printf(m, "\nUsage:\n");
 		seq_printf(
 			m,
-			"  echo 'function+instruction_off[+depth] [stack_var_offset:stack_var_len]' > /proc/kstackwatch\n");
+			"  echo 'function+instruction_off[+depth] [local_var_offset:local_var_len]' > /proc/kstackwatch\n");
 		seq_printf(
 			m,
 			"  if ignore the stack part, watch the canary");
@@ -230,7 +230,7 @@ static int __init kstackwatch_init(void)
 	}
 
 	pr_info("KStackWatch: Module loaded\n");
-	pr_info("KStackWatch: Usage: echo 'function+instruction_off[+depth] [stack_var_offset:stack_var_len]' > /proc/kstackwatch\n");
+	pr_info("KStackWatch: Usage: echo 'function+instruction_off[+depth] [local_var_offset:local_var_len]' > /proc/kstackwatch\n");
 
 	return 0;
 }
