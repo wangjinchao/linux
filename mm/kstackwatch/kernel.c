@@ -1,5 +1,6 @@
-#include "linux/kern_levels.h"
-#include "linux/kstrtox.h"
+/* SPDX-License-Identifier: GPL-2.0 */
+#include <linux/kern_levels.h>
+#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
