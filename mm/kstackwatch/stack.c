@@ -187,7 +187,7 @@ int ksw_stack_init(struct ksw_config *config)
 	/* Setup entry probe */
 	memset(&entry_probe, 0, sizeof(entry_probe));
 	entry_probe.symbol_name = config->function;
-	entry_probe.offset = config->instruction_offset;
+	entry_probe.offset = config->ip_offset;
 	entry_probe.post_handler = entry_handler;
 	probe_config = config;
 	ret = register_kprobe(&entry_probe);

@@ -20,11 +20,11 @@ enum watch_type {
 struct ksw_config {
 	/* function part */
 	char function[MAX_FUNC_NAME_LEN];
-	u16 instruction_offset;
+	u16 ip_offset;
 	u16 depth;
 
 	/* stack part, useless for canary watch */
-	/* offset from rsp at function+instruction_offset */
+	/* offset from rsp at function+ip_offset */
 	u16 local_var_offset;
 
 	/*

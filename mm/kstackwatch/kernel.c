@@ -74,7 +74,7 @@ static void stop_watching(struct ksw_config *config)
 }
 
 /* Parse watch configuration: 
-*    function+instruction_off[+depth] [local_var_offset:local_var_len]
+*    function+ip_offset[+depth] [local_var_offset:local_var_len]
 */
 static int parse_config(char *buf, struct ksw_config *config)
 {
@@ -95,7 +95,7 @@ static int parse_config(char *buf, struct ksw_config *config)
 		stack_part = strim(stack_part + 1);
 	}
 
-	/* 1. Parse the function part: function+instruction_offset[+depth] */
+	/* 1. Parse the function part: function+ip_offset[+depth] */
 	token = strsep(&func_part, "+");
 	if (!token)
 		return -EINVAL;
@@ -103,7 +103,7 @@ static int parse_config(char *buf, struct ksw_config *config)
 	strncpy(config->function, token, MAX_FUNC_NAME_LEN - 1);
 
 	token = strsep(&func_part, "+");
-	if (!token || kstrtou16(token, 0, &config->instruction_offset)) {
+	if (!token || kstrtou16(token, 0, &config->ip_offset)) {
 		pr_err("KSW: Failed to parse instruction offset\n");
 		return -EINVAL;
 	}
@@ -179,7 +179,7 @@ static int kstackwatch_proc_show(struct seq_file *m, void *v)
 		seq_printf(m, "\nUsage:\n");
 		seq_printf(
 			m,
-			"  echo 'function+instruction_off[+depth] [local_var_offset:local_var_len]' > /proc/kstackwatch\n");
+			"  echo 'function+ip_offset[+depth] [local_var_offset:local_var_len]' > /proc/kstackwatch\n");
 		seq_printf(m, "  if ignore the stack part, watch the canary");
 	}
 
@@ -231,7 +231,8 @@ static int __init kstackwatch_init(void)
 	}
 
 	pr_info("KSW: Module loaded\n");
-	pr_info("KSW: Usage: echo 'function+instruction_off[+depth] [local_var_offset:local_var_len]' > /proc/kstackwatch\n");
+	pr_info("KSW: Usage:\n");
+	pr_info("KSW: echo 'function+ip_offset[+depth] [local_var_offset:local_var_len]' > /proc/kstackwatch\n");
 
 	return 0;
 }
