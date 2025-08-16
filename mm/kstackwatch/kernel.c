@@ -199,7 +199,7 @@ static const struct proc_ops kstackwatch_proc_ops = {
 	.proc_release = single_release,
 };
 
-static int is_hwbp_supported(void)
+static int is_ksw_supported(void)
 {
 	static const char *supported_archs[] = { "x86_64", NULL };
 
@@ -221,7 +221,7 @@ static int is_hwbp_supported(void)
 
 static int __init kstackwatch_init(void)
 {
-	if (!is_hwbp_supported()) {
+	if (!is_ksw_supported()) {
 		return -EOPNOTSUPP;
 	}
 
