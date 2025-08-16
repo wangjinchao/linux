@@ -17,7 +17,7 @@ enum watch_type {
 };
 
 /* Single watch configuration */
-struct kstackwatch_config {
+struct ksw_config {
 	/* function part */
 	char function[MAX_FUNC_NAME_LEN];
 	u16 instruction_offset;
@@ -45,7 +45,7 @@ extern bool panic_on_catch;
 void ksw_show_config(void);
 
 /* stack management */
-int ksw_stack_init(struct kstackwatch_config *config);
+int ksw_stack_init(struct ksw_config *config);
 void ksw_stack_exit(void);
 
 /* watch management */
@@ -54,6 +54,6 @@ void ksw_watch_exit(void);
 int ksw_watch_on(u64 watch_addr, u64 watch_len);
 void ksw_watch_off(void);
 void ksw_watch_show(void);
-void ksw_watch_test(void);
+void ksw_watch_fire(void);
 
 #endif /* _KSTACKWATCH_H */

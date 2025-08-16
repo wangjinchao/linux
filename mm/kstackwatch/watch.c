@@ -70,7 +70,7 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 	nr = stack_trace_save_regs(regs, entries, MAX_STACK_ENTRIES, 0);
 	for (i = 0; i < nr; i++) {
 		if (kstackwatch_should_ignore(entries[i])) {
-			pr_info("KStackWatch: Found rethook trampolines, ignoring hit\n");
+			pr_info("KSW: Found rethook trampolines, ignoring hit\n");
 			return;
 		}
 	}
@@ -85,7 +85,7 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 	console_loglevel = saved_loglevel;
 
 	if (panic_on_catch)
-		panic("KStackWatch: Stack corruption detected");
+		panic("KSW: Stack corruption detected");
 }
 
 /* Setup single hardware breakpoint on current CPU */
@@ -102,21 +102,21 @@ static void setup_hwbp_on_local_cpu(void *useless)
 	/* Update breakpoint address */
 	ret = hw_breakpoint_arch_parse(bp, &bp->attr, counter_arch_bp(bp));
 	if (ret) {
-		pr_err("KStackWatch: Failed to parse HWBP for CPU %d ret %d\n",
+		pr_err("KSW: Failed to parse HWBP for CPU %d ret %d\n",
 		       cpu, ret);
 		return;
 	}
 	ret = arch_reinstall_hw_breakpoint(bp);
 	if (ret) {
-		pr_err("KStackWatch: Failed to install HWBP on CPU %d ret %d\n",
+		pr_err("KSW: Failed to install HWBP on CPU %d ret %d\n",
 		       cpu, ret);
 		return;
 	}
 
 	if (bp->attr.bp_addr == (unsigned long)&marker) {
-		pr_info("KStackWatch: HWBP disarmed on CPU %d\n", cpu);
+		pr_info("KSW: HWBP disarmed on CPU %d\n", cpu);
 	} else {
-		pr_info("KStackWatch: HWBP armed on CPU %d at 0x%px ( len %llu)\n",
+		pr_info("KSW: HWBP armed on CPU %d at 0x%px ( len %llu)\n",
 			cpu, (void *)bp->attr.bp_addr, bp->attr.bp_len);
 	}
 }
@@ -154,7 +154,7 @@ int ksw_watch_init(void)
 	hwbp_events = register_wide_hw_breakpoint(&attr, hwbp_handler, NULL);
 	if (IS_ERR((void *)hwbp_events)) {
 		int ret = PTR_ERR((void *)hwbp_events);
-		pr_err("KStackWatch: Failed to register wide hw breakpoint: %d\n",
+		pr_err("KSW: Failed to register wide hw breakpoint: %d\n",
 		       ret);
 		return ret;
 	}
@@ -162,7 +162,7 @@ int ksw_watch_init(void)
 	/* Initialize work structure */
 	INIT_WORK(&myworker.work, setup_hwbp_work_fn);
 
-	pr_info("KStackWatch: HWBP  initialized\n");
+	pr_info("KSW: HWBP  initialized\n");
 	return 0;
 }
 
@@ -172,7 +172,7 @@ void ksw_watch_exit(void)
 	unregister_wide_hw_breakpoint(hwbp_events);
 	hwbp_events = NULL;
 
-	pr_info("KStackWatch: HWBP  cleaned up\n");
+	pr_info("KSW: HWBP  cleaned up\n");
 }
 
 /* Legacy API: Arm single hardware breakpoint (backward compatibility) */
@@ -183,7 +183,7 @@ int ksw_watch_on(u64 watch_addr, u64 watch_len)
 	int cpu;
 
 	if (!watch_addr) {
-		pr_err("KStackWatch: Invalid address for arming HWBP\n");
+		pr_err("KSW: Invalid address for arming HWBP\n");
 		return -EINVAL;
 	}
 
@@ -219,9 +219,9 @@ int ksw_watch_on(u64 watch_addr, u64 watch_len)
 
 void ksw_watch_off(void)
 {
-	pr_info("KStackWatch: Disarming all HWBPs\n");
+	pr_info("KSW: Disarming all HWBPs\n");
 	ksw_watch_on((unsigned long)&marker, sizeof(marker));
-	pr_info("KStackWatch: All HWBPs disarmed\n");
+	pr_info("KSW: All HWBPs disarmed\n");
 }
 
 /* Debug functions */
@@ -230,11 +230,11 @@ void ksw_watch_show(void)
 	struct perf_event *bp;
 
 	bp = *this_cpu_ptr(hwbp_events);
-	pr_info("KStackWatch: HWBP info test - bp_addr: 0x%px len:%llu\n",
+	pr_info("KSW: HWBP info test - bp_addr: 0x%px len:%llu\n",
 		(void *)bp->attr.bp_addr, bp->attr.bp_len);
 }
 
-void ksw_watch_test(void)
+void ksw_watch_fire(void)
 {
 	struct perf_event *bp;
 	char *ptr;

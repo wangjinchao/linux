@@ -36,7 +36,7 @@ static void canary_test_write(void)
 
 	pr_info("KStackWatch Test: Starting canary_test_write with u64 write\n");
 	ksw_watch_show();
-	ksw_watch_test();
+	ksw_watch_fire();
 
 	buffer[0] = 0;
 	/* make sure the compiler do not drop assign action */

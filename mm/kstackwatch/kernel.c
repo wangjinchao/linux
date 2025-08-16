@@ -14,65 +14,68 @@ MODULE_DESCRIPTION("Kernel Stack Watch");
 MODULE_LICENSE("GPL");
 
 /* Global state */
-struct kstackwatch_config global_config;
+struct ksw_config global_config;
 bool watching_active;
 
 /* Module parameters */
 bool panic_on_catch;
 module_param(panic_on_catch, bool, 0644);
 MODULE_PARM_DESC(panic_on_catch,
-		 "Trigger kernel panic when corruption detected");
+		 "Trigger a kernel panic immediately on corruption catch");
 
 void ksw_show_config(void)
 {
-	struct kstackwatch_config *config = &global_config;
-	printk("KStackWatch: watch config %s\n", config->config_str);
+	struct ksw_config *config = &global_config;
+	printk("KSW: watch config %s\n", config->config_str);
 }
 
-static int start_watching(struct kstackwatch_config *config)
+static int start_watching(struct ksw_config *config)
 {
 	int ret;
 
 	if (strlen(config->function) == 0) {
-		pr_err("KStackWatch: No target function specified\n");
+		pr_err("KSW: No target function specified\n");
 		return -EINVAL;
 	}
 
-	/* Initialize HWBP  */
+	/*
+	 * watch init will prealloc HWBP
+	 * so it must be before stack init
+	 */
 	ret = ksw_watch_init();
 	if (ret) {
-		pr_err("KStackWatch: Failed to initialize HWBP : %d\n", ret);
+		pr_err("KSW: ksw_watch_init ret: %d\n", ret);
 		return ret;
 	}
 
 	ret = ksw_stack_init(config);
 	if (ret) {
-		pr_err("KStackWatch: Failed to setup probes: %d\n", ret);
+		pr_err("KSW: ksw_stack_init ret: %d\n", ret);
 		ksw_watch_exit();
 		return ret;
 	}
 	watching_active = true;
 
-	pr_info("KStackWatch: start watching:\n");
+	pr_info("KSW: start watching:\n");
 	ksw_show_config();
 
 	return 0;
 }
 
-static void stop_watching(struct kstackwatch_config *config)
+static void stop_watching(struct ksw_config *config)
 {
 	ksw_stack_exit();
 	ksw_watch_exit();
 	watching_active = false;
 
-	pr_info("KStackWatch: stop watching:\n");
+	pr_info("KSW: stop watching:\n");
 	ksw_show_config();
 }
 
 /* Parse watch configuration: 
 *    function+instruction_off[+depth] [local_var_offset:local_var_len]
 */
-static int parse_config(char *buf, struct kstackwatch_config *config)
+static int parse_config(char *buf, struct ksw_config *config)
 {
 	char *func_part, *stack_part = NULL;
 	char *token;
@@ -100,13 +103,13 @@ static int parse_config(char *buf, struct kstackwatch_config *config)
 
 	token = strsep(&func_part, "+");
 	if (!token || kstrtou16(token, 0, &config->instruction_offset)) {
-		pr_err("KStackWatch: Failed to parse instruction offset\n");
+		pr_err("KSW: Failed to parse instruction offset\n");
 		return -EINVAL;
 	}
 
 	token = strsep(&func_part, "+");
 	if (token && kstrtou16(token, 0, &config->depth)) {
-		pr_err("KStackWatch: Failed to parse depth\n");
+		pr_err("KSW: Failed to parse depth\n");
 		return -EINVAL;
 	}
 	if (!stack_part || !(*stack_part))
@@ -116,12 +119,12 @@ static int parse_config(char *buf, struct kstackwatch_config *config)
 	config->type = WATCH_LOCAL_VAR;
 	token = strsep(&stack_part, ":");
 	if (!token || kstrtou16(token, 0, &config->local_var_offset)) {
-		pr_err("KStackWatch: Failed to parse stack variable offset\n");
+		pr_err("KSW: Failed to parse stack variable offset\n");
 		return -EINVAL;
 	}
 
 	if (!stack_part || kstrtou16(stack_part, 0, &config->local_var_len)) {
-		pr_err("KStackWatch: Failed to parse stack variable length\n");
+		pr_err("KSW: Failed to parse stack variable length\n");
 		return -EINVAL;
 	}
 
@@ -135,7 +138,7 @@ static ssize_t kstackwatch_proc_write(struct file *file,
 {
 	char input[256];
 	int ret;
-	struct kstackwatch_config *config = &global_config;
+	struct ksw_config *config = &global_config;
 
 	if (count == 0 || count >= sizeof(input))
 		return -EINVAL;
@@ -157,7 +160,7 @@ static ssize_t kstackwatch_proc_write(struct file *file,
 	/* Start watching */
 	ret = start_watching(config);
 	if (ret < 0) {
-		pr_err("KStackWatch: Failed to start watching with %d\n", ret);
+		pr_err("KSW: Failed to start watching with %d\n", ret);
 		return ret;
 	}
 
@@ -166,20 +169,17 @@ static ssize_t kstackwatch_proc_write(struct file *file,
 
 static int kstackwatch_proc_show(struct seq_file *m, void *v)
 {
-	struct kstackwatch_config *config = &global_config;
+	struct ksw_config *config = &global_config;
 
 	if (watching_active) {
-		seq_printf(m, "KStackWatch: watch config %s\n",
-			   config->config_str);
+		seq_printf(m, "KSW: watch config %s\n", config->config_str);
 	} else {
 		seq_printf(m, "Not watching\n");
 		seq_printf(m, "\nUsage:\n");
 		seq_printf(
 			m,
 			"  echo 'function+instruction_off[+depth] [local_var_offset:local_var_len]' > /proc/kstackwatch\n");
-		seq_printf(
-			m,
-			"  if ignore the stack part, watch the canary");
+		seq_printf(m, "  if ignore the stack part, watch the canary");
 	}
 
 	return 0;
@@ -207,13 +207,13 @@ static int is_hwbp_supported(void)
 
 	for (i = 0; supported_archs[i] != NULL; i++) {
 		if (strcmp(current_arch, supported_archs[i]) == 0) {
-			pr_info("KStackWatch: Architecture %s supports hardware breakpoints\n",
+			pr_info("KSW: Architecture %s supports hardware breakpoints\n",
 				current_arch);
 			return 1;
 		}
 	}
 
-	pr_warn("KStackWatch: Architecture %s may not support hardware breakpoints\n",
+	pr_warn("KSW: Architecture %s may not support hardware breakpoints\n",
 		current_arch);
 	return 1; /* Allow for testing */
 }
@@ -229,15 +229,15 @@ static int __init kstackwatch_init(void)
 		return -ENOMEM;
 	}
 
-	pr_info("KStackWatch: Module loaded\n");
-	pr_info("KStackWatch: Usage: echo 'function+instruction_off[+depth] [local_var_offset:local_var_len]' > /proc/kstackwatch\n");
+	pr_info("KSW: Module loaded\n");
+	pr_info("KSW: Usage: echo 'function+instruction_off[+depth] [local_var_offset:local_var_len]' > /proc/kstackwatch\n");
 
 	return 0;
 }
 
 static void __exit kstackwatch_exit(void)
 {
-	struct kstackwatch_config *config = &global_config;
+	struct ksw_config *config = &global_config;
 
 	/* Cleanup active watching */
 	if (watching_active)
@@ -246,7 +246,7 @@ static void __exit kstackwatch_exit(void)
 	/* Remove proc interface */
 	remove_proc_entry("kstackwatch", NULL);
 
-	pr_info("KStackWatch: Module unloaded\n");
+	pr_info("KSW: Module unloaded\n");
 }
 
 module_init(kstackwatch_init);
