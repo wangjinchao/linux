@@ -83,7 +83,7 @@ static int parse_config(char *buf, struct kstackwatch_config *config)
 
 	/* strim() removes leading/trailing whitespace */
 	func_part = strim(buf);
-	strncpy(func_part, config->config_str, MAX_CONFIG_STR_LEN);
+	strscpy(config->config_str, func_part, MAX_CONFIG_STR_LEN);
 
 	stack_part = strchr(func_part, ' ');
 	if (stack_part) {
@@ -91,7 +91,7 @@ static int parse_config(char *buf, struct kstackwatch_config *config)
 		stack_part = strim(stack_part + 1);
 	}
 
-	/* 1. Parse the function part: function+offset[+depth] */
+	/* 1. Parse the function part: function+instruction_offset[+depth] */
 	token = strsep(&func_part, "+");
 	if (!token)
 		return -EINVAL;
@@ -99,31 +99,30 @@ static int parse_config(char *buf, struct kstackwatch_config *config)
 	strncpy(config->function, token, MAX_FUNC_NAME_LEN - 1);
 
 	token = strsep(&func_part, "+");
-	if (!token || kstrtou64(token, 0, &config->instruction_offset)) {
+	if (!token || kstrtou16(token, 0, &config->instruction_offset)) {
 		pr_err("KStackWatch: Failed to parse instruction offset\n");
 		return -EINVAL;
 	}
 
 	token = strsep(&func_part, "+");
-	if (token && kstrtou64(token, 0, &config->depth)) {
+	if (token && kstrtou16(token, 0, &config->depth)) {
 		pr_err("KStackWatch: Failed to parse depth\n");
 		return -EINVAL;
 	}
+	if (!stack_part || !(*stack_part))
+		return 0;
 
 	/* 2. Parse the optional stack part: offset:len */
-	if (stack_part && *stack_part) {
-		config->type = WATCH_STACK_OFFSET;
-		token = strsep(&stack_part, ":");
-		if (!token || kstrtos64(token, 0, &config->stack_var_offset)) {
-			pr_err("KStackWatch: Failed to parse stack variable offset\n");
-			return -EINVAL;
-		}
+	config->type = WATCH_STACK_VAR;
+	token = strsep(&stack_part, ":");
+	if (!token || kstrtou16(token, 0, &config->stack_var_offset)) {
+		pr_err("KStackWatch: Failed to parse stack variable offset\n");
+		return -EINVAL;
+	}
 
-		if (!stack_part ||
-		    kstrtou64(stack_part, 0, &config->stack_var_len)) {
-			pr_err("KStackWatch: Failed to parse stack variable length\n");
-			return -EINVAL;
-		}
+	if (!stack_part || kstrtou16(stack_part, 0, &config->stack_var_len)) {
+		pr_err("KStackWatch: Failed to parse stack variable length\n");
+		return -EINVAL;
 	}
 
 	return 0;
@@ -177,19 +176,10 @@ static int kstackwatch_proc_show(struct seq_file *m, void *v)
 		seq_printf(m, "\nUsage:\n");
 		seq_printf(
 			m,
-			"  echo 'function_name+instruction_offset type_str' > /proc/kstackwatch\n");
-		seq_printf(m, "\n type_str:\n");
-		seq_printf(m, "  canary    - Watch stack canary\n");
+			"  echo 'function+instruction_off[+depth] [stack_var_offset:stack_var_len]' > /proc/kstackwatch\n");
 		seq_printf(
 			m,
-			"  stack_offset:stack_size  - Watch stack variable by offset and len (1,2,4,8)\n");
-		seq_printf(m, "\nExamples:\n");
-		seq_printf(
-			m,
-			"  echo 'vulnerable_func+0x20 canary' > /proc/kstackwatch\n");
-		seq_printf(
-			m,
-			"  echo 'test_func+0x32 -64:8,canary' > /proc/kstackwatch\n");
+			"  if ignore the stack part, watch the canary");
 	}
 
 	return 0;
@@ -240,7 +230,7 @@ static int __init kstackwatch_init(void)
 	}
 
 	pr_info("KStackWatch: Module loaded\n");
-	pr_info("KStackWatch: Usage: echo 'function+offset stack_offset:stack_size' > /proc/kstackwatch\n");
+	pr_info("KStackWatch: Usage: echo 'function+instruction_off[+depth] [stack_var_offset:stack_var_len]' > /proc/kstackwatch\n");
 
 	return 0;
 }

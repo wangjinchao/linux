@@ -74,7 +74,7 @@ static int multi_thread_corruption_thread2(void *data)
 
 	wait_for_completion(&g_wait_for_init);
 
-	pr_info("KStackWatch Test: Thread2  woke up. Corrupting variable at %px\n",
+	pr_info("KStackWatch Test: Thread2  woke up. Corrupting variable at 0x%px\n",
 		g_corrupt_ptr);
 	if (g_corrupt_ptr) {
 		*g_corrupt_ptr = 0xdeadbeefdeadbeef;
@@ -97,14 +97,15 @@ static void multi_thread_corruption_thread1(void)
 
 	pr_info("KStackWatch Test: Starting multi_thread_corruption_thread1\n");
 
-	pr_info("KStackWatch Test: Thread A local_var address: %px, value: 0x%llx\n",
+	pr_info("KStackWatch Test: Thread1 local_var address: 0x%px, value: 0x%llx\n",
 		&local_var, local_var);
+	WRITE_ONCE(g_corrupt_ptr, &local_var);
 
 	/* Signal Thread 2 that the pointer is ready, then sleep */
 	complete(&g_wait_for_init);
 	msleep(1000);
 
-	pr_info("KStackWatch Test: Thread A woke up. Final local_var value: 0x%llx\n",
+	pr_info("KStackWatch Test: Thread1 woke up. Final local_var value: 0x%llx\n",
 		local_var);
 }
 
@@ -137,6 +138,7 @@ static void recursive_corruption_test(int depth)
 
 
 	pr_info("KStackWatch Test: Recursive call at depth %d\n", depth);
+	pr_info("KStackWatch Test: buffer 0x%px\n", buffer);
 	if (depth <= MAX_DEPTH)
 		recursive_corruption_test(depth + 1);
 

@@ -13,20 +13,19 @@
 /* Watch target types */
 enum watch_type {
 	WATCH_CANARY = 0, /* Original canary watching */
-	WATCH_STACK_OFFSET, /* Stack offset from frame base */
-	WATCH_LOCAL_VAR, /* Named local variable (future) */
+	WATCH_STACK_VAR, /* Stack offset from frame base */
 };
 
 /* Single watch configuration */
 struct kstackwatch_config {
 	/* function part */
 	char function[MAX_FUNC_NAME_LEN];
-	u64 instruction_offset;
-	u64 depth;
+	u16 instruction_offset;
+	u16 depth;
 
 	/* stack part */
-	s64 stack_var_offset; /* Offset from stack base, assert(offset<=0)  */
-	u64 stack_var_len; /* Watch size (1,2,4,8 bytes) */
+	u16 stack_var_offset; /* Offset from rsp  */
+	u16 stack_var_len; /* Watch size (1,2,4,8 bytes) */
 
 	enum watch_type type;
 

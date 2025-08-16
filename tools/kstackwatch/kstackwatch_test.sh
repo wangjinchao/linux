@@ -54,63 +54,51 @@ show_menu() {
 # --- Test Case 0: Canary Write ---
 test0() {
     echo "=== Running Test Case 0: Canary Write ==="
-    FUNCTION=canary_test_write
-    INSTRUCTION_OFFSET="0x19"
-    echo "${FUNCTION}+${INSTRUCTION_OFFSET}" > /proc/kstackwatch
+    # function+instruction_off[+depth] [stack_var_offset:stack_var_len]
+    echo "canary_test_write+0x19" > /proc/kstackwatch
     echo "test0" > /proc/kstackwatch_test
     echo ""
     echo "-------------------------------------"
-    read -p "Press Enter to continue..."
     echo ""
 }
 
 # --- Test Case 1: Canary Overflow ---
 test1() {
     echo "=== Running Test Case 1: Canary Overflow ==="
-    FUNCTION=canary_test_overflow
-    INSTRUCTION_OFFSET="0x19"
-    echo "${FUNCTION}+${INSTRUCTION_OFFSET}" > /proc/kstackwatch
+    # function+instruction_off[+depth] [stack_var_offset:stack_var_len]
+    echo "canary_test_overflow+0x19" > /proc/kstackwatch
     echo "test1" > /proc/kstackwatch_test
     echo ""
     echo "-------------------------------------"
-    read -p "Press Enter to continue..."
     echo ""
 }
 
 # --- Test Case 2: Multi-threaded Local Variable Corruption ---
 test2() {
     echo "=== Running Test Case 2: Multi-threaded Corruption ==="
-    FUNCTION=multi_thread_corruption_thread1
-    INSTRUCTION_OFFSET="0x26"
-    STACK_OFFSET="-0x10"
-    WRITE_SIZE="8"
-    echo "${FUNCTION}+${INSTRUCTION_OFFSET} ${STACK_OFFSET}:${WRITE_SIZE}" > /proc/kstackwatch
+    # function+instruction_off[+depth] [stack_var_offset:stack_var_len]
+    echo "multi_thread_corruption_thread1+0x2b 0:8" > /proc/kstackwatch
     echo "test2" > /proc/kstackwatch_test
     echo ""
     echo "-------------------------------------"
-    read -p "Press Enter to continue..."
     echo ""
 }
 
 # --- Test Case 3: Recursive Corruption ---
 test3() {
     echo "=== Running Test Case 3: Recursive Corruption ==="
-    FUNCTION=recursive_corruption_test
-    INSTRUCTION_OFFSET="0x1d"
-    DEPTH=3
-    STACK_OFFSET="-0x30"
-    WRITE_SIZE="8"
-    echo "${FUNCTION}+${INSTRUCTION_OFFSET}+${DEPTH} ${STACK_OFFSET}:${WRITE_SIZE}" \
-    	 > /proc/kstackwatch
+    # function+instruction_off[+depth] [stack_var_offset:stack_var_len]
+    echo "recursive_corruption_test+0x2b+3 0:8"  > /proc/kstackwatch
     echo "test3" > /proc/kstackwatch_test
     echo ""
     echo "-------------------------------------"
-    read -p "Press Enter to continue..."
     echo ""
 }
 
 # --- Run all tests ---
 # Removed: These tests cause system crashes and should not be run sequentially
+
+echo 7 > /proc/sys/kernel/printk
 
 # --- Main ---
 if [ -z "$1" ]; then

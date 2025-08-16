@@ -1,7 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * Stack watching with support for canary and offset watching
- */
 
 #include <linux/stackprotector.h>
 #include <linux/kprobes.h>
@@ -40,7 +37,7 @@ static unsigned long find_canary_address(struct pt_regs *regs)
 }
 
 /* Resolve stack offset to actual address */
-static unsigned long resolve_stack_offset(struct pt_regs *regs, u64 offset)
+static unsigned long resolve_stack_offset(struct pt_regs *regs, s64 stack_var_offset)
 {
 	unsigned long stack_base;
 	unsigned long target_addr;
@@ -50,10 +47,10 @@ static unsigned long resolve_stack_offset(struct pt_regs *regs, u64 offset)
 
 	/* Use stack pointer as base for offset calculation */
 	stack_base = regs->sp;
-	target_addr = stack_base + offset;
+	target_addr = stack_base + stack_var_offset;
 
-	pr_info("KStackWatch: Stack base: 0x%lx, offset: %llu, target: 0x%lx\n",
-		stack_base, offset, target_addr);
+	pr_info("KStackWatch: resolve_stack_offset sp:0x%lx offset: %llx, target: 0x%lx\n",
+		stack_base, stack_var_offset, target_addr);
 
 	return target_addr;
 }
@@ -93,15 +90,15 @@ static int parse_watch_info(struct pt_regs *regs,
 		len = 8;
 		break;
 
-	case WATCH_STACK_OFFSET:
+	case WATCH_STACK_VAR:
 		addr = resolve_stack_offset(regs, config->stack_var_offset);
 		if (!addr) {
-			pr_err("KStackWatch: Invalid stack offset %llu\n",
+			pr_err("KStackWatch: Invalid stack var offset %u\n",
 			       config->stack_var_offset);
 			return -EINVAL;
 		}
 		if (validate_stack_address(addr, config->stack_var_len)) {
-			pr_err("KStackWatch: Invalid stack var len %llu\n",
+			pr_err("KStackWatch: Invalid stack var len %u\n",
 			       config->stack_var_len);
 		}
 		len = config->stack_var_len;
@@ -136,7 +133,7 @@ static void entry_handler(struct kprobe *p, struct pt_regs *regs,
 
 	if (cur_depth != probe_config->depth) {
 		/* depth start from 0 */
-		pr_info("KStackWatch: config_depth:%llu cur_depth:%d skipping entry_handler\n",
+		pr_info("KStackWatch: config_depth:%u cur_depth:%d skipping entry_handler\n",
 			probe_config->depth, cur_depth);
 		return;
 	}
@@ -152,8 +149,8 @@ static void entry_handler(struct kprobe *p, struct pt_regs *regs,
 		pr_err("KStackWatch: Failed to arm hwbp: %d\n", ret);
 		return;
 	}
-	pr_info("KStackWatch: Armed for %s at depth %d\n",
-		probe_config->function, cur_depth);
+	pr_info("KStackWatch: Armed for %s at depth %d addr:0x%llx len:%llu\n",
+		probe_config->function, cur_depth, watch_addr, watch_len);
 }
 
 /* Function exit handler */
@@ -165,7 +162,7 @@ static int exit_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 	cur_depth = --(*depth);
 	if (cur_depth != probe_config->depth) {
 		/* depth start from 0 */
-		pr_info("KStackWatch: exit_handler config depth:%llu cur_depth:%d skipping\n",
+		pr_info("KStackWatch: exit_handler config depth:%u cur_depth:%d skipping\n",
 			probe_config->depth, cur_depth);
 		return 0;
 	}
