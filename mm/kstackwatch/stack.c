@@ -11,7 +11,7 @@ static DEFINE_PER_CPU(int, monitor_depth);
 struct ksw_config *probe_config;
 
 /* Find canary address in current stack frame */
-static unsigned long find_canary_address(struct pt_regs *regs)
+static unsigned long ksw_stack_find_canary(struct pt_regs *regs)
 {
 	unsigned long *stack_ptr, *stack_end;
 	unsigned long expected_canary;
@@ -37,7 +37,8 @@ static unsigned long find_canary_address(struct pt_regs *regs)
 }
 
 /* Resolve stack offset to actual address */
-static unsigned long resolve_stack_offset(struct pt_regs *regs, s64 local_var_offset)
+static unsigned long ksw_stack_resolve_offset(struct pt_regs *regs,
+					      s64 local_var_offset)
 {
 	unsigned long stack_base;
 	unsigned long target_addr;
@@ -49,14 +50,14 @@ static unsigned long resolve_stack_offset(struct pt_regs *regs, s64 local_var_of
 	stack_base = regs->sp;
 	target_addr = stack_base + local_var_offset;
 
-	pr_info("KSW: resolve_stack_offset sp:0x%lx offset: %llx, target: 0x%lx\n",
+	pr_info("KSW: ksw_stack_resolve_offset sp:0x%lx offset: %llx, target: 0x%lx\n",
 		stack_base, local_var_offset, target_addr);
 
 	return target_addr;
 }
 
 /* Validate that address is within current stack bounds */
-static int validate_stack_address(unsigned long addr, size_t size)
+static int ksw_stack_validate_addr(unsigned long addr, size_t size)
 {
 	unsigned long stack_start, stack_end;
 
@@ -76,9 +77,9 @@ static int validate_stack_address(unsigned long addr, size_t size)
 }
 
 /* Setup hardware breakpoints for active watches */
-static int parse_watch_info(struct pt_regs *regs,
-			    struct ksw_config *config, u64 *watch_addr,
-			    u64 *watch_len)
+static int ksw_stack_prepare_watch(struct pt_regs *regs,
+				   struct ksw_config *config, u64 *watch_addr,
+				   u64 *watch_len)
 {
 	u64 addr;
 	u64 len;
@@ -86,18 +87,18 @@ static int parse_watch_info(struct pt_regs *regs,
 	/* Resolve addresses for all active watches */
 	switch (config->type) {
 	case WATCH_CANARY:
-		addr = find_canary_address(regs);
+		addr = ksw_stack_find_canary(regs);
 		len = 8;
 		break;
 
 	case WATCH_LOCAL_VAR:
-		addr = resolve_stack_offset(regs, config->local_var_offset);
+		addr = ksw_stack_resolve_offset(regs, config->local_var_offset);
 		if (!addr) {
 			pr_err("KSW: Invalid stack var offset %u\n",
 			       config->local_var_offset);
 			return -EINVAL;
 		}
-		if (validate_stack_address(addr, config->local_var_len)) {
+		if (ksw_stack_validate_addr(addr, config->local_var_len)) {
 			pr_err("KSW: Invalid stack var len %u\n",
 			       config->local_var_len);
 		}
@@ -118,9 +119,8 @@ static int parse_watch_info(struct pt_regs *regs,
 static struct kprobe entry_probe;
 static struct kretprobe exit_probe;
 
-/* Function entry handler */
-static void entry_handler(struct kprobe *p, struct pt_regs *regs,
-			  unsigned long flags)
+static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
+				    unsigned long flags)
 {
 	int *depth, cur_depth;
 	int ret;
@@ -133,13 +133,14 @@ static void entry_handler(struct kprobe *p, struct pt_regs *regs,
 
 	if (cur_depth != probe_config->depth) {
 		/* depth start from 0 */
-		pr_info("KSW: config_depth:%u cur_depth:%d skipping entry_handler\n",
+		pr_info("KSW: config_depth:%u cur_depth:%d skipping ksw_stack_entry_handler\n",
 			probe_config->depth, cur_depth);
 		return;
 	}
 
 	/* Setup breakpoints for all active watches */
-	ret = parse_watch_info(regs, probe_config, &watch_addr, &watch_len);
+	ret = ksw_stack_prepare_watch(regs, probe_config, &watch_addr,
+				      &watch_len);
 	if (ret) {
 		pr_err("KSW: Failed to parse watch info: %d\n", ret);
 		return;
@@ -154,7 +155,8 @@ static void entry_handler(struct kprobe *p, struct pt_regs *regs,
 }
 
 /* Function exit handler */
-static int exit_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
+static int ksw_stack_exit_handler(struct kretprobe_instance *ri,
+				  struct pt_regs *regs)
 {
 	int *depth, cur_depth;
 
@@ -162,7 +164,7 @@ static int exit_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 	cur_depth = --(*depth);
 	if (cur_depth != probe_config->depth) {
 		/* depth start from 0 */
-		pr_info("KSW: exit_handler config depth:%u cur_depth:%d skipping\n",
+		pr_info("KSW: ksw_stack_exit_handler config depth:%u cur_depth:%d skipping\n",
 			probe_config->depth, cur_depth);
 		return 0;
 	}
@@ -188,7 +190,7 @@ int ksw_stack_init(struct ksw_config *config)
 	memset(&entry_probe, 0, sizeof(entry_probe));
 	entry_probe.symbol_name = config->function;
 	entry_probe.offset = config->ip_offset;
-	entry_probe.post_handler = entry_handler;
+	entry_probe.post_handler = ksw_stack_entry_handler;
 	probe_config = config;
 	ret = register_kprobe(&entry_probe);
 	if (ret < 0) {
@@ -199,7 +201,7 @@ int ksw_stack_init(struct ksw_config *config)
 	/* Setup exit probe */
 	memset(&exit_probe, 0, sizeof(exit_probe));
 	exit_probe.kp.symbol_name = config->function;
-	exit_probe.handler = exit_handler;
+	exit_probe.handler = ksw_stack_exit_handler;
 	exit_probe.maxactive = 20;
 
 	ret = register_kretprobe(&exit_probe);
