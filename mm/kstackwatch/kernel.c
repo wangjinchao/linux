@@ -57,7 +57,7 @@ static int start_watching(struct ksw_config *config)
 	}
 	watching_active = true;
 
-	pr_info("KSW: start watching:\n");
+	pr_info("KSW: start watching\n");
 	ksw_show_config(KERN_INFO);
 
 	return 0;
