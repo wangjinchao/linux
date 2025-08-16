@@ -42,7 +42,7 @@ struct ksw_config {
 
 /* Global state */
 extern bool panic_on_catch;
-void ksw_show_config(void);
+void ksw_show_config(const char *lvl);
 
 /* stack management */
 int ksw_stack_init(struct ksw_config *config);

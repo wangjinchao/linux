@@ -3,7 +3,6 @@
  * Hardware breakpoint management for KStackWatch (enhanced multi-watch support)
  */
 
-#include "linux/printk.h"
 #include <linux/kprobes.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/perf_event.h>
@@ -61,7 +60,6 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 			 struct pt_regs *regs)
 {
 	unsigned long entries[MAX_STACK_ENTRIES];
-	int saved_loglevel;
 	int i, nr = 0;
 
 	kstackwatch_resolve_trampolines();
@@ -75,14 +73,12 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data,
 		}
 	}
 #endif
-	saved_loglevel = console_loglevel;
-	console_loglevel = CONSOLE_LOGLEVEL_MOTORMOUTH;
+
 	pr_emerg("========== KStackWatch: Caught stack corruption =======\n");
-	ksw_show_config();
+	ksw_show_config(KERN_EMERG);
 	show_regs(regs);
 	pr_emerg("========== KStackWatch End ==========\n");
 	mdelay(100);
-	console_loglevel = saved_loglevel;
 
 	if (panic_on_catch)
 		panic("KSW: Stack corruption detected");

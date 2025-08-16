@@ -1,3 +1,4 @@
+#include "linux/kern_levels.h"
 #include "linux/kstrtox.h"
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -23,10 +24,10 @@ module_param(panic_on_catch, bool, 0644);
 MODULE_PARM_DESC(panic_on_catch,
 		 "Trigger a kernel panic immediately on corruption catch");
 
-void ksw_show_config(void)
+void ksw_show_config(const char *lvl)
 {
 	struct ksw_config *config = &global_config;
-	printk("KSW: watch config %s\n", config->config_str);
+	printk("%sKSW: watch config %s\n", lvl, config->config_str);
 }
 
 static int start_watching(struct ksw_config *config)
@@ -57,7 +58,7 @@ static int start_watching(struct ksw_config *config)
 	watching_active = true;
 
 	pr_info("KSW: start watching:\n");
-	ksw_show_config();
+	ksw_show_config(KERN_INFO);
 
 	return 0;
 }
@@ -69,7 +70,7 @@ static void stop_watching(struct ksw_config *config)
 	watching_active = false;
 
 	pr_info("KSW: stop watching:\n");
-	ksw_show_config();
+	ksw_show_config(KERN_INFO);
 }
 
 /* Parse watch configuration: 
