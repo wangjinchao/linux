@@ -6,7 +6,7 @@
 #include <linux/perf_event.h>
 
 #define MAX_FUNC_NAME_LEN 64
-#define MAX_TYPE_STR_LEN 32
+#define MAX_CONFIG_STR_LEN 128
 #define MAX_FRAME_SEARCH 128
 #define MAX_STACK_WATCHES 8
 
@@ -19,18 +19,19 @@ enum watch_type {
 
 /* Single watch configuration */
 struct kstackwatch_config {
-	enum watch_type type;
+	/* function part */
 	char function[MAX_FUNC_NAME_LEN];
 	u64 instruction_offset;
+	u64 depth;
+
+	/* stack part */
+	s64 stack_var_offset; /* Offset from stack base, assert(offset<=0)  */
+	u64 stack_var_len; /* Watch size (1,2,4,8 bytes) */
+
+	enum watch_type type;
 
 	// save to show
-	char type_str[MAX_TYPE_STR_LEN];
-
-	/* For WATCH_STACK_OFFSET, useless for canary type */
-	struct {
-		s64 offset; /* Offset from stack base, assert(offset<=0)  */
-		u64 len; /* Watch size (1,2,4,8 bytes) */
-	} stack_var;
+	char config_str[MAX_CONFIG_STR_LEN];
 };
 
 /* Global state */
@@ -48,6 +49,5 @@ int hwbp_arm_all(u64 watch_addr, u64 watch_len);
 void hwbp_disarm_all(void);
 void hwbp_addr_show(void);
 void hwbp_addr_test(void);
-
 
 #endif /* _STACKWATCH_H */

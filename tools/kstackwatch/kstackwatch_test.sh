@@ -97,9 +97,11 @@ test3() {
     echo "=== Running Test Case 3: Recursive Corruption ==="
     FUNCTION=recursive_corruption_test
     INSTRUCTION_OFFSET="0x1d"
+    DEPTH=3
     STACK_OFFSET="-0x30"
     WRITE_SIZE="8"
-    echo "${FUNCTION}+${INSTRUCTION_OFFSET} ${STACK_OFFSET}:${WRITE_SIZE}" > /proc/kstackwatch
+    echo "${FUNCTION}+${INSTRUCTION_OFFSET}+${DEPTH} ${STACK_OFFSET}:${WRITE_SIZE}" \
+    	 > /proc/kstackwatch
     echo "test3" > /proc/kstackwatch_test
     echo ""
     echo "-------------------------------------"

@@ -94,17 +94,17 @@ static int parse_watch_info(struct pt_regs *regs,
 		break;
 
 	case WATCH_STACK_OFFSET:
-		addr = resolve_stack_offset(regs, config->stack_var.offset);
+		addr = resolve_stack_offset(regs, config->stack_var_offset);
 		if (!addr) {
 			pr_err("KStackWatch: Invalid stack offset %llu\n",
-			       config->stack_var.offset);
+			       config->stack_var_offset);
 			return -EINVAL;
 		}
-		if (validate_stack_address(addr, config->stack_var.len)) {
+		if (validate_stack_address(addr, config->stack_var_len)) {
 			pr_err("KStackWatch: Invalid stack var len %llu\n",
-			       config->stack_var.len);
+			       config->stack_var_len);
 		}
-		len = config->stack_var.len;
+		len = config->stack_var_len;
 		break;
 
 	default:
@@ -134,10 +134,10 @@ static void entry_handler(struct kprobe *p, struct pt_regs *regs,
 	depth = this_cpu_ptr(&monitor_depth);
 	cur_depth = (*depth)++;
 
-	if (cur_depth > 0) {
+	if (cur_depth != probe_config->depth) {
 		/* depth start from 0 */
-		pr_info("KStackWatch: Skipping entry_handler at depth %d\n",
-			cur_depth);
+		pr_info("KStackWatch: config_depth:%llu cur_depth:%d skipping entry_handler\n",
+			probe_config->depth, cur_depth);
 		return;
 	}
 
@@ -153,7 +153,7 @@ static void entry_handler(struct kprobe *p, struct pt_regs *regs,
 		return;
 	}
 	pr_info("KStackWatch: Armed for %s at depth %d\n",
-		probe_config->function, *depth);
+		probe_config->function, cur_depth);
 }
 
 /* Function exit handler */
@@ -163,10 +163,10 @@ static int exit_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 
 	depth = this_cpu_ptr(&monitor_depth);
 	cur_depth = --(*depth);
-	if (cur_depth > 0) {
+	if (cur_depth != probe_config->depth) {
 		/* depth start from 0 */
-		pr_info("KStackWatch: Skipping exit_handler at depth %d\n",
-			cur_depth);
+		pr_info("KStackWatch: exit_handler config depth:%llu cur_depth:%d skipping\n",
+			probe_config->depth, cur_depth);
 		return 0;
 	}
 
