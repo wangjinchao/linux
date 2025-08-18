@@ -189,8 +189,31 @@ static const struct proc_ops kstackwatch_proc_ops = {
 	.proc_release = single_release,
 };
 
+static int is_ksw_supported(void)
+{
+	static const char *const supported_archs[] = { "x86_64", NULL };
+
+	const char *current_arch = utsname()->machine;
+	int i;
+
+	for (i = 0; supported_archs[i] != NULL; i++) {
+		if (strcmp(current_arch, supported_archs[i]) == 0) {
+			pr_info("KSW: Architecture %s supports hardware breakpoints\n",
+				current_arch);
+			return 1;
+		}
+	}
+
+	pr_warn("KSW: Architecture %s may not support hardware breakpoints\n",
+		current_arch);
+	return 1;
+}
+
 static int __init kstackwatch_init(void)
 {
+	if (!is_ksw_supported())
+		return -EOPNOTSUPP;
+
 	ksw_config = kmalloc(sizeof(*ksw_config), GFP_KERNEL);
 	if (!ksw_config)
 		return -ENOMEM;
