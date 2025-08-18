@@ -26,11 +26,29 @@ MODULE_PARM_DESC(panic_on_catch,
 
 static int start_watching(void)
 {
+	int ret;
+
 	if (strlen(ksw_config->function) == 0) {
 		pr_err("KSW: No target function specified\n");
 		return -EINVAL;
 	}
 
+	/*
+	 * watch init will prealloc HWBP
+	 * so it must be before stack init
+	 */
+	ret = ksw_watch_init(ksw_config);
+	if (ret) {
+		pr_err("KSW: ksw_watch_init ret: %d\n", ret);
+		return ret;
+	}
+
+	ret = ksw_stack_init(ksw_config);
+	if (ret) {
+		pr_err("KSW: ksw_stack_init ret: %d\n", ret);
+		ksw_watch_exit();
+		return ret;
+	}
 	watching_active = true;
 
 	pr_info("KSW: start watching %s\n", ksw_config->config_str);
@@ -39,6 +57,8 @@ static int start_watching(void)
 
 static void stop_watching(void)
 {
+	ksw_stack_exit();
+	ksw_watch_exit();
 	watching_active = false;
 
 	pr_info("KSW: stop watching %s\n", ksw_config->config_str);
