@@ -6,6 +6,8 @@
 
 #include "kstackwatch.h"
 
+/* Per-CPU watching state */
+static DEFINE_PER_CPU(int, monitor_depth);
 struct ksw_config *probe_config;
 
 /* Find canary address in current stack frame */
@@ -120,9 +122,21 @@ static struct kretprobe exit_probe;
 static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
 				    unsigned long flags)
 {
+	int *depth, cur_depth;
 	int ret;
 	u64 watch_addr;
 	u64 watch_len;
+
+	/* Handle nested calls - only monitor outermost */
+	depth = this_cpu_ptr(&monitor_depth);
+	cur_depth = (*depth)++;
+
+	if (cur_depth != probe_config->depth) {
+		/* depth start from 0 */
+		pr_info("KSW: config_depth:%u cur_depth:%d skipping %s\n",
+			probe_config->depth, cur_depth, __func__);
+		return;
+	}
 
 	/* Setup breakpoints for all active watches */
 	ret = ksw_stack_prepare_watch(regs, probe_config, &watch_addr,
@@ -136,14 +150,25 @@ static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
 		pr_err("KSW: Failed to arm hwbp: %d\n", ret);
 		return;
 	}
-	pr_info("KSW: Armed for %s at addr:0x%llx len:%llu\n",
-		probe_config->function, watch_addr, watch_len);
+	pr_info("KSW: Armed for %s at depth %d addr:0x%llx len:%llu\n",
+		probe_config->function, cur_depth, watch_addr, watch_len);
 }
 
 /* Function exit handler */
 static int ksw_stack_exit_handler(struct kretprobe_instance *ri,
 				  struct pt_regs *regs)
 {
+	int *depth, cur_depth;
+
+	depth = this_cpu_ptr(&monitor_depth);
+	cur_depth = --(*depth);
+	if (cur_depth != probe_config->depth) {
+		/* depth start from 0 */
+		pr_info("KSW: %s config depth:%u cur_depth:%d skipping\n",
+			__func__, probe_config->depth, cur_depth);
+		return 0;
+	}
+
 	ksw_watch_off();
 	pr_info("KSW: Disarmed for %s\n", probe_config->function);
 
@@ -153,6 +178,13 @@ static int ksw_stack_exit_handler(struct kretprobe_instance *ri,
 int ksw_stack_init(struct ksw_config *config)
 {
 	int ret;
+	int cpu;
+	int *depth;
+
+	for_each_possible_cpu(cpu) {
+		depth = per_cpu_ptr(&monitor_depth, cpu);
+		WRITE_ONCE(*depth, 0);
+	}
 
 	/* Setup entry probe */
 	memset(&entry_probe, 0, sizeof(entry_probe));
