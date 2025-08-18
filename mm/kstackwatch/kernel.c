@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+#include "linux/printk.h"
 #include <linux/kern_levels.h>
 #include <linux/kstrtox.h>
 #include <linux/module.h>
@@ -16,7 +17,7 @@ MODULE_DESCRIPTION("Kernel Stack Watch");
 MODULE_LICENSE("GPL");
 
 /* Global state */
-struct ksw_config global_config;
+struct ksw_config *ksw_config;
 bool watching_active;
 
 /* Module parameters */
@@ -27,15 +28,14 @@ MODULE_PARM_DESC(panic_on_catch,
 
 void ksw_show_config(const char *lvl)
 {
-	struct ksw_config *config = &global_config;
-	printk("%sKSW: watch config %s\n", lvl, config->config_str);
+	printk("%sKSW: watch config %s\n", lvl, ksw_config->config_str);
 }
 
-static int start_watching(struct ksw_config *config)
+static int start_watching(void)
 {
 	int ret;
 
-	if (strlen(config->function) == 0) {
+	if (strlen(ksw_config->function) == 0) {
 		pr_err("KSW: No target function specified\n");
 		return -EINVAL;
 	}
@@ -50,7 +50,7 @@ static int start_watching(struct ksw_config *config)
 		return ret;
 	}
 
-	ret = ksw_stack_init(config);
+	ret = ksw_stack_init(ksw_config);
 	if (ret) {
 		pr_err("KSW: ksw_stack_init ret: %d\n", ret);
 		ksw_watch_exit();
@@ -64,7 +64,7 @@ static int start_watching(struct ksw_config *config)
 	return 0;
 }
 
-static void stop_watching(struct ksw_config *config)
+static void stop_watching(void)
 {
 	ksw_stack_exit();
 	ksw_watch_exit();
@@ -140,8 +140,6 @@ static ssize_t kstackwatch_proc_write(struct file *file,
 {
 	char input[256];
 	int ret;
-	struct ksw_config *config = &global_config;
-
 	if (count == 0 || count >= sizeof(input))
 		return -EINVAL;
 
@@ -153,14 +151,14 @@ static ssize_t kstackwatch_proc_write(struct file *file,
 
 	/* Stop current watching */
 	if (watching_active)
-		stop_watching(config);
+		stop_watching();
 
-	ret = parse_config(input, config);
+	ret = parse_config(input, ksw_config);
 	if (ret)
 		return ret;
 
 	/* Start watching */
-	ret = start_watching(config);
+	ret = start_watching();
 	if (ret < 0) {
 		pr_err("KSW: Failed to start watching with %d\n", ret);
 		return ret;
@@ -171,7 +169,7 @@ static ssize_t kstackwatch_proc_write(struct file *file,
 
 static int kstackwatch_proc_show(struct seq_file *m, void *v)
 {
-	struct ksw_config *config = &global_config;
+	struct ksw_config *config = ksw_config;
 
 	if (watching_active) {
 		seq_printf(m, "KSW: watch config %s\n", config->config_str);
@@ -226,8 +224,13 @@ static int __init kstackwatch_init(void)
 		return -EOPNOTSUPP;
 	}
 
+	ksw_config = kmalloc(sizeof(*ksw_config), GFP_KERNEL);
+	if (!ksw_config)
+		return -ENOMEM;
+
 	/* Create proc interface */
 	if (!proc_create("kstackwatch", 0644, NULL, &kstackwatch_proc_ops)) {
+		pr_err("KSW: create proc kstackwatch fail");
 		return -ENOMEM;
 	}
 
@@ -240,14 +243,13 @@ static int __init kstackwatch_init(void)
 
 static void __exit kstackwatch_exit(void)
 {
-	struct ksw_config *config = &global_config;
-
 	/* Cleanup active watching */
 	if (watching_active)
-		stop_watching(config);
+		stop_watching();
 
 	/* Remove proc interface */
 	remove_proc_entry("kstackwatch", NULL);
+	kfree(ksw_config);
 
 	pr_info("KSW: Module unloaded\n");
 }
