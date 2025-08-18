@@ -48,9 +48,8 @@ static DEFINE_PER_CPU(unsigned long, cpu_debugreg[HBP_NUM]);
  */
 static DEFINE_PER_CPU(struct perf_event *, bp_per_reg[HBP_NUM]);
 
-
-static inline unsigned long
-__encode_dr7(int drnum, unsigned int len, unsigned int type)
+static inline unsigned long __encode_dr7(int drnum, unsigned int len,
+					 unsigned int type)
 {
 	unsigned long bp_info;
 
@@ -133,6 +132,54 @@ int arch_install_hw_breakpoint(struct perf_event *bp)
 }
 
 /*
+ * Reinstall the breakpoint contained in the given counter.
+ *
+ * This function is used to make small modifications to a counter in an
+ * atomic context. First, we locate the debug address register it uses,
+ * and then we re-enable the breakpoint.
+ *
+ * Atomic: we hold the counter->ctx->lock and we only handle variables
+ * and registers local to this cpu.
+ */
+int arch_reinstall_hw_breakpoint(struct perf_event *bp)
+{
+	struct arch_hw_breakpoint *info = counter_arch_bp(bp);
+	unsigned long *dr7;
+	int i;
+
+	lockdep_assert_irqs_disabled();
+
+	for (i = 0; i < HBP_NUM; i++) {
+		struct perf_event **slot = this_cpu_ptr(&bp_per_reg[i]);
+
+		if (*slot == bp)
+			break;
+	}
+
+	if (WARN_ONCE(i == HBP_NUM, "Can't find any breakpoint slot"))
+		return -EBUSY;
+
+	set_debugreg(info->address, i);
+	__this_cpu_write(cpu_debugreg[i], info->address);
+
+	dr7 = this_cpu_ptr(&cpu_dr7);
+	*dr7 |= encode_dr7(i, info->len, info->type);
+
+	/*
+	 * Ensure we first write cpu_dr7 before we set the DR7 register.
+	 * This ensures an NMI never see cpu_dr7 0 when DR7 is not.
+	 */
+	barrier();
+
+	set_debugreg(*dr7, 7);
+	if (info->mask)
+		amd_set_dr_addr_mask(info->mask, i);
+
+	return 0;
+}
+EXPORT_SYMBOL(arch_reinstall_hw_breakpoint);
+
+/*
  * Uninstall the breakpoint contained in the given counter.
  *
  * First we search the debug address register it uses and then we disable
@@ -195,8 +242,8 @@ static int arch_bp_generic_len(int x86_len)
 	}
 }
 
-int arch_bp_generic_fields(int x86_len, int x86_type,
-			   int *gen_len, int *gen_type)
+int arch_bp_generic_fields(int x86_len, int x86_type, int *gen_len,
+			   int *gen_type)
 {
 	int len;
 
@@ -312,7 +359,8 @@ static inline bool within_cpu_entry(unsigned long addr, unsigned long end)
 		 * When in guest (X86_FEATURE_HYPERVISOR), local_db_save()
 		 * will read per-cpu cpu_dr7 before clear dr7 register.
 		 */
-		if (within_area(addr, end, (unsigned long)&per_cpu(cpu_dr7, cpu),
+		if (within_area(addr, end,
+				(unsigned long)&per_cpu(cpu_dr7, cpu),
 				sizeof(cpu_dr7)))
 			return true;
 	}
@@ -425,7 +473,6 @@ int hw_breakpoint_arch_parse(struct perf_event *bp,
 {
 	unsigned int align;
 	int ret;
-
 
 	ret = arch_build_bp_info(bp, attr, hw);
 	if (ret)
@@ -577,8 +624,8 @@ static int hw_breakpoint_handler(struct die_args *args)
 /*
  * Handle debug exception notifications.
  */
-int hw_breakpoint_exceptions_notify(
-		struct notifier_block *unused, unsigned long val, void *data)
+int hw_breakpoint_exceptions_notify(struct notifier_block *unused,
+				    unsigned long val, void *data)
 {
 	if (val != DIE_DEBUG)
 		return NOTIFY_DONE;
