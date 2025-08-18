@@ -2,6 +2,8 @@
 #ifndef _KSTACKWATCH_H
 #define _KSTACKWATCH_H
 
+#include <linux/kprobes.h>
+#include <linux/perf_event.h>
 #include <linux/types.h>
 
 #define MAX_FUNC_NAME_LEN 64
@@ -48,5 +50,7 @@ int ksw_watch_init(struct ksw_config *config);
 void ksw_watch_exit(void);
 int ksw_watch_on(u64 watch_addr, u64 watch_len);
 void ksw_watch_off(void);
+void ksw_watch_show(void);
+void ksw_watch_fire(void);
 
 #endif /* _KSTACKWATCH_H */

@@ -218,3 +218,23 @@ void ksw_watch_off(void)
 	ksw_watch_on((unsigned long)&marker, sizeof(marker));
 	pr_info("KSW: All HWBPs disarmed\n");
 }
+
+/* Debug functions */
+void ksw_watch_show(void)
+{
+	struct perf_event *bp;
+
+	bp = *this_cpu_ptr(watch_events);
+	pr_info("KSW: HWBP info test - bp_addr: 0x%px len:%llu\n",
+		(void *)bp->attr.bp_addr, bp->attr.bp_len);
+}
+
+void ksw_watch_fire(void)
+{
+	struct perf_event *bp;
+	char *ptr;
+
+	bp = *this_cpu_ptr(watch_events);
+	ptr = (char *)READ_ONCE(bp->attr.bp_addr);
+	*ptr = 0x42; // This should trigger immediately
+}
