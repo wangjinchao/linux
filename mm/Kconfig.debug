@@ -309,3 +309,15 @@ config PER_VMA_LOCK_STATS
 	  overhead in the page fault path.
 
 	  If in doubt, say N.
+
+
+config KSTACK_WATCH
+	tristate "Kernel Stack Watch"
+	depends on STACKPROTECTOR && HAVE_HW_BREAKPOINT && KPROBES && HAVE_KRETPROBES
+	help
+	  This debugging tool monitors kernel stack usage. When enabled,
+	  it can detect potential stack corruption by watching the remaining
+	  stack space. This provides real-time warnings before a crash occurs,
+	  which is useful for debugging stability issues.
+
+	  If unsure, say N.
