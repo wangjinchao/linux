@@ -31,11 +31,48 @@ static void ksw_watch_on_local_cpu(void *useless);
 static DEFINE_PER_CPU(call_single_data_t,
 		      hwbp_csd) = CSD_INIT(ksw_watch_on_local_cpu, NULL);
 
+/* Resolved once, then reused */
+static unsigned long tramp_start, tramp_end;
+
+static void ksw_watch_resolve_trampolines(void)
+{
+	unsigned long sz, off;
+
+	if (likely(tramp_start && tramp_end))
+		return;
+
+	tramp_start = kallsyms_lookup_name("arch_rethook_trampoline");
+	if (tramp_start && kallsyms_lookup_size_offset(tramp_start, &sz, &off))
+		tramp_end = tramp_start + sz;
+}
+
+static bool ksw_watch_in_trampoline(unsigned long ip)
+{
+	if (tramp_start && tramp_end && ip >= tramp_start && ip < tramp_end)
+		return true;
+	return false;
+}
+
 /* Enhanced breakpoint handler with watch identification */
 static void ksw_watch_handler(struct perf_event *bp,
 			      struct perf_sample_data *data,
 			      struct pt_regs *regs)
 {
+	unsigned long entries[MAX_STACK_ENTRIES];
+	int i, nr = 0;
+
+	ksw_watch_resolve_trampolines();
+
+#if IS_ENABLED(CONFIG_STACKTRACE)
+	nr = stack_trace_save_regs(regs, entries, MAX_STACK_ENTRIES, 0);
+	for (i = 0; i < nr; i++) {
+		if (ksw_watch_in_trampoline(entries[i])) {
+			pr_info("KSW: Found rethook trampolines, ignoring hit\n");
+			return;
+		}
+	}
+#endif
+
 	pr_emerg("========== KStackWatch: Caught stack corruption =======\n");
 	pr_emerg("KSW: config %s\n", watch_config->config_str);
 	show_regs(regs);
