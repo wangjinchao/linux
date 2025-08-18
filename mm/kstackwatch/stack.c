@@ -6,8 +6,10 @@
 
 #include "kstackwatch.h"
 
+struct ksw_config *probe_config;
+
 /* Find canary address in current stack frame */
-static unsigned long __maybe_unused ksw_stack_find_canary(struct pt_regs *regs)
+static unsigned long ksw_stack_find_canary(struct pt_regs *regs)
 {
 	unsigned long *stack_ptr, *stack_end;
 	unsigned long expected_canary;
@@ -33,7 +35,7 @@ static unsigned long __maybe_unused ksw_stack_find_canary(struct pt_regs *regs)
 }
 
 /* Resolve stack offset to actual address */
-static unsigned long __maybe_unused ksw_stack_resolve_offset(struct pt_regs *regs,
+static unsigned long ksw_stack_resolve_offset(struct pt_regs *regs,
 					      s64 local_var_offset)
 {
 	unsigned long stack_base;
@@ -53,7 +55,7 @@ static unsigned long __maybe_unused ksw_stack_resolve_offset(struct pt_regs *reg
 }
 
 /* Validate that address is within current stack bounds */
-static int __maybe_unused ksw_stack_validate_addr(unsigned long addr, size_t size)
+static int ksw_stack_validate_addr(unsigned long addr, size_t size)
 {
 	unsigned long stack_start, stack_end;
 
@@ -73,7 +75,7 @@ static int __maybe_unused ksw_stack_validate_addr(unsigned long addr, size_t siz
 }
 
 /* Setup hardware breakpoints for active watches */
-static int __maybe_unused ksw_stack_prepare_watch(struct pt_regs *regs,
+static int ksw_stack_prepare_watch(struct pt_regs *regs,
 				   struct ksw_config *config, u64 *watch_addr,
 				   u64 *watch_len)
 {
@@ -109,4 +111,80 @@ static int __maybe_unused ksw_stack_prepare_watch(struct pt_regs *regs,
 	*watch_addr = addr;
 	*watch_len = len;
 	return 0;
+}
+
+/* Kprobe handlers */
+static struct kprobe entry_probe;
+static struct kretprobe exit_probe;
+
+static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
+				    unsigned long flags)
+{
+	int ret;
+	u64 watch_addr;
+	u64 watch_len;
+
+	/* Setup breakpoints for all active watches */
+	ret = ksw_stack_prepare_watch(regs, probe_config, &watch_addr,
+				      &watch_len);
+	if (ret) {
+		pr_err("KSW: Failed to parse watch info: %d\n", ret);
+		return;
+	}
+	ret = ksw_watch_on(watch_addr, watch_len);
+	if (ret) {
+		pr_err("KSW: Failed to arm hwbp: %d\n", ret);
+		return;
+	}
+	pr_info("KSW: Armed for %s at addr:0x%llx len:%llu\n",
+		probe_config->function, watch_addr, watch_len);
+}
+
+/* Function exit handler */
+static int ksw_stack_exit_handler(struct kretprobe_instance *ri,
+				  struct pt_regs *regs)
+{
+	ksw_watch_off();
+	pr_info("KSW: Disarmed for %s\n", probe_config->function);
+
+	return 0;
+}
+
+int ksw_stack_init(struct ksw_config *config)
+{
+	int ret;
+
+	/* Setup entry probe */
+	memset(&entry_probe, 0, sizeof(entry_probe));
+	entry_probe.symbol_name = config->function;
+	entry_probe.offset = config->ip_offset;
+	entry_probe.post_handler = ksw_stack_entry_handler;
+	probe_config = config;
+	ret = register_kprobe(&entry_probe);
+	if (ret < 0) {
+		pr_err("KSW: Failed to register kprobe ret %d\n", ret);
+		return ret;
+	}
+
+	/* Setup exit probe */
+	memset(&exit_probe, 0, sizeof(exit_probe));
+	exit_probe.kp.symbol_name = config->function;
+	exit_probe.handler = ksw_stack_exit_handler;
+	exit_probe.maxactive = 20;
+
+	ret = register_kretprobe(&exit_probe);
+	if (ret < 0) {
+		pr_err("KSW: Failed to register exit probe for %s: %d\n",
+		       probe_config->function, ret);
+		unregister_kprobe(&entry_probe);
+		return ret;
+	}
+
+	return 0;
+}
+
+void ksw_stack_exit(void)
+{
+	unregister_kretprobe(&exit_probe);
+	unregister_kprobe(&entry_probe);
 }
