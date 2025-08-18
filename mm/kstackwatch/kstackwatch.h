@@ -6,6 +6,7 @@
 
 #define MAX_FUNC_NAME_LEN 64
 #define MAX_CONFIG_STR_LEN 128
+#define MAX_FRAME_SEARCH 128
 
 /* Watch target types */
 enum watch_type {
@@ -37,6 +38,10 @@ struct ksw_config {
 };
 
 extern bool panic_on_catch;
+
+/* stack management */
+int ksw_stack_init(struct ksw_config *config);
+void ksw_stack_exit(void);
 
 /* watch management */
 int ksw_watch_init(struct ksw_config *config);
