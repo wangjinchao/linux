@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+// SPDX-License-Identifier: GPL-2.0
 
 #include <linux/stackprotector.h>
 #include <linux/kprobes.h>
@@ -50,7 +50,7 @@ static unsigned long ksw_stack_resolve_offset(struct pt_regs *regs,
 	stack_base = regs->sp;
 	target_addr = stack_base + local_var_offset;
 
-	pr_info("KSW: ksw_stack_resolve_offset sp:0x%lx offset: %llx, target: 0x%lx\n",
+	pr_info("KSW: %s sp:0x%lx offset: %llx, target: 0x%lx\n", __func__,
 		stack_base, local_var_offset, target_addr);
 
 	return target_addr;
@@ -133,8 +133,8 @@ static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
 
 	if (cur_depth != probe_config->depth) {
 		/* depth start from 0 */
-		pr_info("KSW: config_depth:%u cur_depth:%d skipping ksw_stack_entry_handler\n",
-			probe_config->depth, cur_depth);
+		pr_info("KSW: config_depth:%u cur_depth:%d skipping %s\n",
+			probe_config->depth, cur_depth, __func__);
 		return;
 	}
 
@@ -164,8 +164,8 @@ static int ksw_stack_exit_handler(struct kretprobe_instance *ri,
 	cur_depth = --(*depth);
 	if (cur_depth != probe_config->depth) {
 		/* depth start from 0 */
-		pr_info("KSW: ksw_stack_exit_handler config depth:%u cur_depth:%d skipping\n",
-			probe_config->depth, cur_depth);
+		pr_info("KSW: %s config depth:%u cur_depth:%d skipping\n",
+			__func__, probe_config->depth, cur_depth);
 		return 0;
 	}
 

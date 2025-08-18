@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+// SPDX-License-Identifier: GPL-2.0
 #include "linux/printk.h"
 #include <linux/kern_levels.h>
 #include <linux/kstrtox.h>
@@ -74,9 +74,9 @@ static void stop_watching(void)
 	ksw_show_config(KERN_INFO);
 }
 
-/* Parse watch configuration: 
-*    function+ip_offset[+depth] [local_var_offset:local_var_len]
-*/
+/* Parse watch configuration:
+ *    function+ip_offset[+depth] [local_var_offset:local_var_len]
+ */
 static int parse_config(char *buf, struct ksw_config *config)
 {
 	char *func_part, *stack_part = NULL;
@@ -101,7 +101,7 @@ static int parse_config(char *buf, struct ksw_config *config)
 	if (!token)
 		return -EINVAL;
 
-	strncpy(config->function, token, MAX_FUNC_NAME_LEN - 1);
+	strscpy(config->function, token, MAX_FUNC_NAME_LEN - 1);
 
 	token = strsep(&func_part, "+");
 	if (!token || kstrtou16(token, 0, &config->ip_offset)) {
@@ -140,6 +140,7 @@ static ssize_t kstackwatch_proc_write(struct file *file,
 {
 	char input[256];
 	int ret;
+
 	if (count == 0 || count >= sizeof(input))
 		return -EINVAL;
 
@@ -174,12 +175,12 @@ static int kstackwatch_proc_show(struct seq_file *m, void *v)
 	if (watching_active) {
 		seq_printf(m, "KSW: watch config %s\n", config->config_str);
 	} else {
-		seq_printf(m, "Not watching\n");
-		seq_printf(m, "\nUsage:\n");
-		seq_printf(
+		seq_puts(m, "Not watching\n");
+		seq_puts(m, "\nUsage:\n");
+		seq_puts(
 			m,
 			"  echo 'function+ip_offset[+depth] [local_var_offset:local_var_len]' > /proc/kstackwatch\n");
-		seq_printf(m, "  if ignore the stack part, watch the canary");
+		seq_puts(m, "  if ignore the stack part, watch the canary");
 	}
 
 	return 0;
@@ -200,7 +201,7 @@ static const struct proc_ops kstackwatch_proc_ops = {
 
 static int is_ksw_supported(void)
 {
-	static const char *supported_archs[] = { "x86_64", NULL };
+	static const char *const supported_archs[] = { "x86_64", NULL };
 
 	const char *current_arch = utsname()->machine;
 	int i;
@@ -220,9 +221,8 @@ static int is_ksw_supported(void)
 
 static int __init kstackwatch_init(void)
 {
-	if (!is_ksw_supported()) {
+	if (!is_ksw_supported())
 		return -EOPNOTSUPP;
-	}
 
 	ksw_config = kmalloc(sizeof(*ksw_config), GFP_KERNEL);
 	if (!ksw_config)

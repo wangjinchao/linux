@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+// SPDX-License-Identifier: GPL-2.0
+
 /*
  * Hardware breakpoint management for KStackWatch (enhanced multi-watch support)
  */
@@ -206,7 +207,6 @@ int ksw_watch_on(u64 watch_addr, u64 watch_len)
 	WRITE_ONCE(myworker.original_cpu, smp_processor_id());
 
 	spin_unlock_irqrestore(&watch_lock, flags);
-	wmb();
 
 	/* Then install on all CPUs */
 	/* Run on current CPU directly */
