@@ -141,7 +141,7 @@ int ksw_watch_on(u64 watch_addr, u64 watch_len)
 	int cpu;
 
 	if (!watch_addr) {
-		pr_err("KSW: invalid address for arming HWBP\n");
+		pr_err("KSW: watch with invalid address\n");
 		return -EINVAL;
 	}
 
