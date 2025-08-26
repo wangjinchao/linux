@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-#include <linux/stackprotector.h>
-#include <linux/kprobes.h>
 #include <linux/fprobe.h>
-#include <asm/stacktrace.h>
+#include <linux/kprobes.h>
+#include <linux/stackprotector.h>
 
 #include "kstackwatch.h"
 
@@ -28,7 +27,7 @@ static unsigned long ksw_stack_find_canary(struct pt_regs *regs)
 
 	for (i = 0; i < MAX_FRAME_SEARCH && &stack_ptr[i] < stack_end; i++) {
 		if (stack_ptr[i] == expected_canary) {
-			pr_info("KSW: Canary found i:%d 0x%px\n", i,
+			pr_info("KSW: canary found i:%d 0x%px\n", i,
 				&stack_ptr[i]);
 			return (unsigned long)&stack_ptr[i];
 		}
@@ -69,7 +68,7 @@ static int ksw_stack_validate_addr(unsigned long addr, size_t size)
 	stack_end = stack_start + THREAD_SIZE;
 
 	if (addr < stack_start || (addr + size) > stack_end) {
-		pr_warn("KSW: Address 0x%lx (size %zu) outside stack bounds [0x%lx-0x%lx]\n",
+		pr_warn("KSW: address 0x%lx (size %zu) outside stack bounds [0x%lx-0x%lx]\n",
 			addr, size, stack_start, stack_end);
 		return -ERANGE;
 	}
@@ -77,7 +76,7 @@ static int ksw_stack_validate_addr(unsigned long addr, size_t size)
 	return 0;
 }
 
-/* Setup hardware breakpoints for active watches */
+/* prepare watch_addr and watch_len for watch */
 static int ksw_stack_prepare_watch(struct pt_regs *regs,
 				   struct ksw_config *config, u64 *watch_addr,
 				   u64 *watch_len)
@@ -95,12 +94,12 @@ static int ksw_stack_prepare_watch(struct pt_regs *regs,
 	case WATCH_LOCAL_VAR:
 		addr = ksw_stack_resolve_offset(regs, config->local_var_offset);
 		if (!addr) {
-			pr_err("KSW: Invalid stack var offset %u\n",
+			pr_err("KSW: invalid stack var offset %u\n",
 			       config->local_var_offset);
 			return -EINVAL;
 		}
 		if (ksw_stack_validate_addr(addr, config->local_var_len)) {
-			pr_err("KSW: Invalid stack var len %u\n",
+			pr_err("KSW: invalid stack var len %u\n",
 			       config->local_var_len);
 		}
 		len = config->local_var_len;
@@ -116,9 +115,7 @@ static int ksw_stack_prepare_watch(struct pt_regs *regs,
 	return 0;
 }
 
-/* Kprobe handlers */
 static struct kprobe entry_probe;
-static struct kretprobe exit_probe;
 static struct fprobe exit_probe_fprobe;
 
 static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
@@ -129,114 +126,51 @@ static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
 	u64 watch_addr;
 	u64 watch_len;
 
-	/* Handle nested calls - only monitor outermost */
 	depth = this_cpu_ptr(&monitor_depth);
 	cur_depth = (*depth)++;
 
+	/* depth start from 0 */
 	if (cur_depth != probe_config->depth) {
-		/* depth start from 0 */
-		pr_info("KSW: config_depth:%u cur_depth:%d skipping %s\n",
-			probe_config->depth, cur_depth, __func__);
+		pr_info("KSW: config_depth:%u cur_depth:%d entry skipping\n",
+			probe_config->depth, cur_depth);
 		return;
 	}
 
-	/* Setup breakpoints for all active watches */
 	ret = ksw_stack_prepare_watch(regs, probe_config, &watch_addr,
 				      &watch_len);
 	if (ret) {
-		pr_err("KSW: Failed to parse watch info: %d\n", ret);
+		pr_err("KSW: failed to prepare watch target: %d\n", ret);
 		return;
 	}
+
 	ret = ksw_watch_on(watch_addr, watch_len);
 	if (ret) {
-		pr_err("KSW: Failed to arm hwbp: %d\n", ret);
+		pr_err("KSW: failed to watch on depth:%d addr:0x%llx len:%llx %d\n",
+		       cur_depth, watch_addr, watch_len, ret);
 		return;
 	}
-	pr_info("KSW: Armed for %s at depth %d addr:0x%llx len:%llu\n",
-		probe_config->function, cur_depth, watch_addr, watch_len);
 }
 
-/* Function exit handler */
-static int ksw_stack_exit_handler(struct kretprobe_instance *ri,
-				  struct pt_regs *regs)
+static void ksw_stack_exit_handler(struct fprobe *fp, unsigned long ip,
+				   unsigned long ret_ip,
+				   struct ftrace_regs *regs, void *data)
 {
 	int *depth, cur_depth;
 
 	depth = this_cpu_ptr(&monitor_depth);
 	cur_depth = --(*depth);
+
+	/* depth start from 0 */
 	if (cur_depth != probe_config->depth) {
-		/* depth start from 0 */
-		pr_info("KSW: %s config depth:%u cur_depth:%d skipping\n",
-			__func__, probe_config->depth, cur_depth);
-		return 0;
-	}
-
-	ksw_watch_off();
-	pr_info("KSW: Disarmed for %s\n", probe_config->function);
-
-	return 0;
-}
-
-static void ksw_stack_exit_handler_fprobe(struct fprobe *fp, unsigned long ip,
-					  unsigned long ret_ip,
-					  struct ftrace_regs *regs, void *data)
-{
-	int *depth, cur_depth;
-
-	depth = this_cpu_ptr(&monitor_depth);
-	cur_depth = --(*depth);
-	if (cur_depth != probe_config->depth) {
-		/* depth start from 0 */
-		pr_info("KSW: %s config depth:%u cur_depth:%d skipping\n",
-			__func__, probe_config->depth, cur_depth);
+		pr_info("KSW: config_depth:%u cur_depth:%d exit skipping\n",
+			probe_config->depth, cur_depth);
 		return;
 	}
 
 	ksw_watch_off();
-	pr_info("KSW: Disarmed for %s\n", probe_config->function);
 }
 
 int ksw_stack_init(struct ksw_config *config)
-{
-	int ret;
-	int cpu;
-	int *depth;
-
-	for_each_possible_cpu(cpu) {
-		depth = per_cpu_ptr(&monitor_depth, cpu);
-		WRITE_ONCE(*depth, 0);
-	}
-
-	/* Setup entry probe */
-	memset(&entry_probe, 0, sizeof(entry_probe));
-	entry_probe.symbol_name = config->function;
-	entry_probe.offset = config->ip_offset;
-	entry_probe.post_handler = ksw_stack_entry_handler;
-	probe_config = config;
-	ret = register_kprobe(&entry_probe);
-	if (ret < 0) {
-		pr_err("KSW: Failed to register kprobe ret %d\n", ret);
-		return ret;
-	}
-
-	/* Setup exit probe */
-	memset(&exit_probe, 0, sizeof(exit_probe));
-	exit_probe.kp.symbol_name = config->function;
-	exit_probe.handler = ksw_stack_exit_handler;
-	exit_probe.maxactive = 20;
-
-	ret = register_kretprobe(&exit_probe);
-	if (ret < 0) {
-		pr_err("KSW: Failed to register exit probe for %s: %d\n",
-		       probe_config->function, ret);
-		unregister_kprobe(&entry_probe);
-		return ret;
-	}
-
-	return 0;
-}
-
-int ksw_stack_init_fprobe(struct ksw_config *config)
 {
 	int ret;
 	int cpu;
@@ -262,15 +196,13 @@ int ksw_stack_init_fprobe(struct ksw_config *config)
 
 	/* Setup exit probe */
 	memset(&exit_probe_fprobe, 0, sizeof(exit_probe_fprobe));
-	exit_probe_fprobe.exit_handler = ksw_stack_exit_handler_fprobe;
+	exit_probe_fprobe.exit_handler = ksw_stack_exit_handler;
 	symbuf = probe_config->function;
 
-	ret = register_fprobe_syms(&exit_probe_fprobe,
-				   (const char **)&symbuf,
+	ret = register_fprobe_syms(&exit_probe_fprobe, (const char **)&symbuf,
 				   1);
 	if (ret < 0) {
-		pr_err("KSW: Failed to register exit probe for %s: %d\n",
-		       probe_config->function, ret);
+		pr_err("KSW: register_fprobe_syms fail %d\n", ret);
 		unregister_kprobe(&entry_probe);
 		return ret;
 	}
@@ -279,12 +211,6 @@ int ksw_stack_init_fprobe(struct ksw_config *config)
 }
 
 void ksw_stack_exit(void)
-{
-	unregister_kretprobe(&exit_probe);
-	unregister_kprobe(&entry_probe);
-}
-
-void ksw_stack_exit_fprobe(void)
 {
 	unregister_fprobe(&exit_probe_fprobe);
 	unregister_kprobe(&entry_probe);
