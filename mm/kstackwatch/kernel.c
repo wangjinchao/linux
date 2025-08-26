@@ -112,7 +112,7 @@ static int ksw_parse_config(char *buf, struct ksw_config *config)
 	if (!local_var_part || !(*local_var_part))
 		return 0;
 
-	/* 2. Parse the optional stack part: offset:len */
+	/* 2. Parse the optional local var: offset:len */
 	config->type = WATCH_LOCAL_VAR;
 	token = strsep(&local_var_part, ":");
 	if (!token || kstrtou16(token, 0, &config->local_var_offset)) {

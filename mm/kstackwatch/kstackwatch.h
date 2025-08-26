@@ -10,10 +10,9 @@
 #define MAX_CONFIG_STR_LEN 128
 #define MAX_FRAME_SEARCH 128
 
-/* Watch target types */
 enum watch_type {
-	WATCH_CANARY = 0, /* canary placed by compiler */
-	WATCH_LOCAL_VAR, /* local var defined by code */
+	WATCH_CANARY = 0,
+	WATCH_LOCAL_VAR,
 };
 
 struct ksw_config {
@@ -22,7 +21,7 @@ struct ksw_config {
 	u16 ip_offset;
 	u16 depth;
 
-	/* stack part, useless for canary watch */
+	/* local var, useless for canary watch */
 	/* offset from rsp at function+ip_offset */
 	u16 local_var_offset;
 
@@ -44,8 +43,6 @@ extern bool panic_on_catch;
 /* stack management */
 int ksw_stack_init(struct ksw_config *config);
 void ksw_stack_exit(void);
-int ksw_stack_init_fprobe(struct ksw_config *config);
-void ksw_stack_exit_fprobe(void);
 
 /* watch management */
 int ksw_watch_init(struct ksw_config *config);
