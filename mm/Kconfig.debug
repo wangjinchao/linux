@@ -315,13 +315,11 @@ config KSTACK_WATCH
 	tristate "Kernel Stack Watch"
 	depends on STACKPROTECTOR && HAVE_HW_BREAKPOINT && KPROBES && FPROBE
 	help
-	  This debugging tool monitors kernel stack usage. When enabled,
-	  it can detect potential stack corruption by watching the remaining
-	  stack space. This provides real-time warnings before a crash occurs,
-	  which is useful for debugging stability issues.
+	  A lightweight real-time debugging tool to detect stack corruption.
+	  It can watch either the canary or local variable and tracks
+	  the recursive depth of the monitored function.
 
 	  If unsure, say N.
-
 
 config KSTACK_WATCH_TEST
 	tristate "KStackWatch Test Module"
