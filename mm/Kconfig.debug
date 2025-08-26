@@ -313,7 +313,7 @@ config PER_VMA_LOCK_STATS
 
 config KSTACK_WATCH
 	tristate "Kernel Stack Watch"
-	depends on STACKPROTECTOR && HAVE_HW_BREAKPOINT && KPROBES && HAVE_KRETPROBES
+	depends on STACKPROTECTOR && HAVE_HW_BREAKPOINT && KPROBES && FPROBE
 	help
 	  This debugging tool monitors kernel stack usage. When enabled,
 	  it can detect potential stack corruption by watching the remaining

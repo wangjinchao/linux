@@ -44,6 +44,8 @@ extern bool panic_on_catch;
 /* stack management */
 int ksw_stack_init(struct ksw_config *config);
 void ksw_stack_exit(void);
+int ksw_stack_init_fprobe(struct ksw_config *config);
+void ksw_stack_exit_fprobe(void);
 
 /* watch management */
 int ksw_watch_init(struct ksw_config *config);

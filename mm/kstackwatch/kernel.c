@@ -43,9 +43,9 @@ static int start_watching(void)
 		return ret;
 	}
 
-	ret = ksw_stack_init(ksw_config);
+	ret = ksw_stack_init_fprobe(ksw_config);
 	if (ret) {
-		pr_err("KSW: ksw_stack_init ret: %d\n", ret);
+		pr_err("KSW: ksw_stack_init_fprobe ret: %d\n", ret);
 		ksw_watch_exit();
 		return ret;
 	}
@@ -57,7 +57,7 @@ static int start_watching(void)
 
 static void stop_watching(void)
 {
-	ksw_stack_exit();
+	ksw_stack_exit_fprobe();
 	ksw_watch_exit();
 	watching_active = false;
 
