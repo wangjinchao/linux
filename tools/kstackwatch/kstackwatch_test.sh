@@ -65,6 +65,7 @@ test0() {
 	# function+instruction_off[+depth] [local_var_offset:local_var_len]
 	echo "canary_test_write+0x12" >/proc/kstackwatch
 	echo "test0" >/proc/kstackwatch_test
+	echo >/proc/kstackwatch
 }
 
 # --- Test Case 1: Canary Overflow ---
@@ -73,6 +74,8 @@ test1() {
 	# function+instruction_off[+depth] [local_var_offset:local_var_len]
 	echo "canary_test_overflow+0x12" >/proc/kstackwatch
 	echo "test1" >/proc/kstackwatch_test
+	echo >/proc/kstackwatch
+
 }
 
 # --- Test Case 2: Multi-threaded Local Variable Corruption ---
@@ -81,6 +84,7 @@ test2() {
 	# function+instruction_off[+depth] [local_var_offset:local_var_len]
 	echo "multi_thread_corruption_hapless+0x7f 0:8" >/proc/kstackwatch
 	echo "test2" >/proc/kstackwatch_test
+	echo >/proc/kstackwatch
 }
 
 # --- Test Case 3: Recursive Corruption ---
@@ -89,12 +93,11 @@ test3() {
 	# function+instruction_off[+depth] [local_var_offset:local_var_len]
 	echo "recursive_corruption_test+0x1b+3 0:8" >/proc/kstackwatch
 	echo "test3" >/proc/kstackwatch_test
+	echo >/proc/kstackwatch
 }
 
 # --- Run all tests ---
 # Removed: These tests cause system crashes and should not be run sequentially
-
-echo 7 >/proc/sys/kernel/printk
 
 # --- Main ---
 if [ -z "$1" ]; then
