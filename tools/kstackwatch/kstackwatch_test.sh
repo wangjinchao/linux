@@ -55,7 +55,7 @@ show_menu() {
 test0() {
     echo "=== Running Test Case 0: Canary Write ==="
     # function+instruction_off[+depth] [local_var_offset:local_var_len]
-    echo "canary_test_write+0x17" > /proc/kstackwatch
+    echo "canary_test_write+0x12" > /proc/kstackwatch
     echo "test0" > /proc/kstackwatch_test
     echo ""
     echo "-------------------------------------"
@@ -66,7 +66,7 @@ test0() {
 test1() {
     echo "=== Running Test Case 1: Canary Overflow ==="
     # function+instruction_off[+depth] [local_var_offset:local_var_len]
-    echo "canary_test_overflow+0x17" > /proc/kstackwatch
+    echo "canary_test_overflow+0x12" > /proc/kstackwatch
     echo "test1" > /proc/kstackwatch_test
     echo ""
     echo "-------------------------------------"
@@ -77,7 +77,7 @@ test1() {
 test2() {
     echo "=== Running Test Case 2: Multi-threaded Corruption ==="
     # function+instruction_off[+depth] [local_var_offset:local_var_len]
-    echo "multi_thread_corruption_thread1+0x26 0:8" > /proc/kstackwatch
+    echo "multi_thread_corruption_hapless+0x72 0:8" > /proc/kstackwatch
     echo "test2" > /proc/kstackwatch_test
     echo ""
     echo "-------------------------------------"
@@ -88,7 +88,7 @@ test2() {
 test3() {
     echo "=== Running Test Case 3: Recursive Corruption ==="
     # function+instruction_off[+depth] [local_var_offset:local_var_len]
-    echo "recursive_corruption_test+0x23+3 0:8"  > /proc/kstackwatch
+    echo "recursive_corruption_test+0x1b+3 0:8"  > /proc/kstackwatch
     echo "test3" > /proc/kstackwatch_test
     echo ""
     echo "-------------------------------------"

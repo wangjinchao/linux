@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
+#include "asm-generic/rwonce.h"
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/module.h>
+#include <linux/prandom.h>
 #include <linux/proc_fs.h>
+#include <linux/random.h>
 #include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
@@ -20,7 +23,6 @@ static struct proc_dir_entry *test_proc;
 
 /* global variables for multi-thread test synchronization */
 static u64 *g_corrupt_ptr;
-static struct completion g_wait_for_init;
 
 /*
  * Test Case 0: Write to the canary position directly (Canary Test)
@@ -63,65 +65,80 @@ static void canary_test_overflow(void)
 	pr_info("KSW test: canary overflow test completed\n");
 }
 
-/*
- * corrupt the local var on stack of multi_thread_corruption_thread1()
- */
-static int multi_thread_corruption_thread2(void *data)
+static void do_something(void)
+{
+	u32 rand;
+
+	get_random_bytes(&rand, sizeof(rand));
+	rand = rand % 1000;
+	msleep(rand);
+}
+
+static void multi_thread_corruption_buggy(void)
+{
+	u64 buffer[BUFFER_SIZE];
+
+	pr_info("KSW test: Starting %s\n", __func__);
+
+	pr_info("KSW test: %s address: 0x%px\n", __func__, buffer);
+	WRITE_ONCE(g_corrupt_ptr, buffer);
+
+	do_something();
+
+	//buggy: return without reset g_corrupt_ptr
+}
+
+static int multi_thread_corruption_unwitting(void *data)
 {
 	pr_info("KSW test: starting %s\n", __func__);
 
-	wait_for_completion(&g_wait_for_init);
+	do_something();
+	if (!g_corrupt_ptr)
+		return 0;
 
-	pr_info("KSW test: thread2  woke up, corrupt variable at 0x%px\n",
-		g_corrupt_ptr);
-	if (g_corrupt_ptr)
-		*g_corrupt_ptr = 0xdeadbeefdeadbeef;
-
-	pr_info("KSW test: thread2 finished corruption\n");
+	for (int i = 0; i < BUFFER_SIZE; i++)
+		g_corrupt_ptr[i] = i;
 
 	return 0;
 }
 
-static void multi_thread_corruption_thread1(void)
+static void multi_thread_corruption_hapless(int i)
 {
-	u64 local_var = 0x1234567887654321;
+	u64 local_var;
 
-	pr_info("KSW test: Starting %s\n", __func__);
+	pr_info("KSW test: starting %s\n", __func__);
+	get_random_bytes(&local_var, sizeof(local_var));
+	local_var = 0xff0000 + local_var % 0xffff;
 
-	pr_info("KSW test: Thread1 local_var address: 0x%px, value: 0x%llx\n",
-		&local_var, local_var);
-	WRITE_ONCE(g_corrupt_ptr, &local_var);
-
-	/* Signal Thread 2 that the pointer is ready, then sleep */
-	complete(&g_wait_for_init);
-	msleep(1000);
-
-	pr_info("KSW test: Thread1 woke up. Final local_var value: 0x%llx\n",
-		local_var);
+	do_something();
+	if (local_var >= 0xff0000)
+		pr_info("KSW test: %d happy with 0x%llx", i, local_var);
+	else
+		pr_info("KSW test: %d unhappy with 0x%llx", i, local_var);
 }
 
 /*
  * Test Case 2: Multi-threaded Local Variable Corruption
- * thread1() initializes a local variable, makes its address globally
- * available, and then sleeps
- * thread2() will corrupt the local var of thread1()
+ * buggy() does not protect its local var correctly
+ * unwitting() simply does its intended word
+ * hapless() is unaware know what happened
  */
 static void multi_thread_corruption_test(void)
 {
-	struct task_struct *corrupt_thread;
+	struct task_struct *unwitting;
 
 	pr_info("KSW test: starting %s\n", __func__);
 
-	/* Reset completion */
-	init_completion(&g_wait_for_init);
-
-	corrupt_thread = kthread_run(multi_thread_corruption_thread2, NULL,
-				     "multi_thread_corruption_thread2");
-	if (IS_ERR(corrupt_thread)) {
+	unwitting = kthread_run(multi_thread_corruption_unwitting, NULL,
+				"unwitting");
+	if (IS_ERR(unwitting)) {
 		pr_err("KSW test: failed to create thread2\n");
 		return;
 	}
-	multi_thread_corruption_thread1();
+	multi_thread_corruption_buggy();
+
+	for (int i = 0; i < 100; i++)
+		multi_thread_corruption_hapless(i);
 }
 
 /*
