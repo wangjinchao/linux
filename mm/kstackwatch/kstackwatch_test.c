@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "asm-generic/rwonce.h"
+#include "linux/printk.h"
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/kthread.h>
@@ -33,7 +34,7 @@ static void canary_test_write(void)
 {
 	u64 buffer[BUFFER_SIZE];
 
-	pr_info("KSW test: starting %s with u64 write\n", __func__);
+	pr_info("KSW: test: starting %s with u64 write\n", __func__);
 	ksw_watch_show();
 	ksw_watch_fire();
 
@@ -41,7 +42,7 @@ static void canary_test_write(void)
 
 	/* make sure the compiler do not drop assign action */
 	barrier_data(buffer);
-	pr_info("KSW test: canary write test completed\n");
+	pr_info("KSW: test: canary write test completed\n");
 }
 
 /*
@@ -53,8 +54,8 @@ static void canary_test_overflow(void)
 {
 	u64 buffer[BUFFER_SIZE];
 
-	pr_info("KSW test: starting %s with u64 write\n", __func__);
-	pr_info("KSW test: buffer 0x%px\n", buffer);
+	pr_info("KSW: test: starting %s with u64 write\n", __func__);
+	pr_info("KSW: test: buffer 0x%px\n", buffer);
 
 	/* intentionally overflow the u64 buffer. */
 	buffer[BUFFER_SIZE] = 0xdeadbeefdeadbeef;
@@ -62,42 +63,42 @@ static void canary_test_overflow(void)
 	/* make sure the compiler do not drop assign action */
 	barrier_data(buffer);
 
-	pr_info("KSW test: canary overflow test completed\n");
+	pr_info("KSW: test: canary overflow test completed\n");
 }
 
-static void do_something(void)
+static void do_something(int min_ms, int max_ms)
 {
 	u32 rand;
 
 	get_random_bytes(&rand, sizeof(rand));
-	rand = rand % 1000;
+	rand = min_ms + rand % (max_ms - min_ms + 1);
 	msleep(rand);
 }
 
-static void multi_thread_corruption_buggy(void)
+static void multi_thread_corruption_buggy(int i)
 {
-	u64 buffer[BUFFER_SIZE];
+	u64 local_var;
 
-	pr_info("KSW test: Starting %s\n", __func__);
+	pr_info("KSW: test: Starting %s\n", __func__);
 
-	pr_info("KSW test: %s address: 0x%px\n", __func__, buffer);
-	WRITE_ONCE(g_corrupt_ptr, buffer);
-
-	do_something();
+	pr_info("KSW: test: %s %d local_var addr: 0x%px\n", __func__, i,
+		&local_var);
+	WRITE_ONCE(g_corrupt_ptr, &local_var);
 
 	//buggy: return without reset g_corrupt_ptr
 }
 
 static int multi_thread_corruption_unwitting(void *data)
 {
-	pr_info("KSW test: starting %s\n", __func__);
+	pr_debug("KSW: test: starting %s\n", __func__);
+	u64 *local_ptr;
 
-	do_something();
-	if (!g_corrupt_ptr)
-		return 0;
+	do {
+		local_ptr = READ_ONCE(g_corrupt_ptr);
+		do_something(0, 300);
+	} while (!local_ptr);
 
-	for (int i = 0; i < BUFFER_SIZE; i++)
-		g_corrupt_ptr[i] = i;
+	local_ptr[0] = 0;
 
 	return 0;
 }
@@ -106,15 +107,18 @@ static void multi_thread_corruption_hapless(int i)
 {
 	u64 local_var;
 
-	pr_info("KSW test: starting %s\n", __func__);
+	pr_debug("KSW: test: starting %s %d\n", __func__, i);
 	get_random_bytes(&local_var, sizeof(local_var));
 	local_var = 0xff0000 + local_var % 0xffff;
+	pr_debug("KSW: test: %s local_var addr: 0x%px\n", __func__, &local_var);
 
-	do_something();
+	do_something(50, 150);
 	if (local_var >= 0xff0000)
-		pr_info("KSW test: %d happy with 0x%llx", i, local_var);
+		pr_info("KSW: test: %s %d happy with 0x%llx", __func__, i,
+			local_var);
 	else
-		pr_info("KSW test: %d unhappy with 0x%llx", i, local_var);
+		pr_info("KSW: test: %s %d unhappy with 0x%llx", __func__, i,
+			local_var);
 }
 
 /*
@@ -127,17 +131,18 @@ static void multi_thread_corruption_test(void)
 {
 	struct task_struct *unwitting;
 
-	pr_info("KSW test: starting %s\n", __func__);
+	pr_info("KSW: test: starting %s\n", __func__);
+	WRITE_ONCE(g_corrupt_ptr, NULL);
 
 	unwitting = kthread_run(multi_thread_corruption_unwitting, NULL,
 				"unwitting");
 	if (IS_ERR(unwitting)) {
-		pr_err("KSW test: failed to create thread2\n");
+		pr_err("KSW: test: failed to create thread2\n");
 		return;
 	}
-	multi_thread_corruption_buggy();
 
-	for (int i = 0; i < 100; i++)
+	multi_thread_corruption_buggy(0);
+	for (int i = 0; i < 10; i++)
 		multi_thread_corruption_hapless(i);
 }
 
@@ -152,8 +157,8 @@ static void recursive_corruption_test(int depth)
 {
 	u64 buffer[BUFFER_SIZE];
 
-	pr_info("KSW test: recursive call at depth %d\n", depth);
-	pr_info("KSW test: buffer 0x%px\n", buffer);
+	pr_info("KSW: test: recursive call at depth %d\n", depth);
+	pr_info("KSW: test: buffer 0x%px\n", buffer);
 	if (depth <= MAX_DEPTH)
 		recursive_corruption_test(depth + 1);
 
@@ -162,7 +167,7 @@ static void recursive_corruption_test(int depth)
 	/* make sure the compiler do not drop assign action */
 	barrier_data(buffer);
 
-	pr_info("KSW test: returning from depth %d\n", depth);
+	pr_info("KSW: test: returning from depth %d\n", depth);
 }
 
 static ssize_t test_proc_write(struct file *file, const char __user *buffer,
@@ -180,33 +185,33 @@ static ssize_t test_proc_write(struct file *file, const char __user *buffer,
 	cmd[count] = '\0';
 	strim(cmd);
 
-	pr_info("KSW test: received command: %s\n", cmd);
+	pr_info("KSW: test: received command: %s\n", cmd);
 
 	if (sscanf(cmd, "test%d", &test_num) == 1) {
 		switch (test_num) {
 		case 0:
-			pr_info("KSW test: triggering canary write test\n");
+			pr_info("KSW: test: triggering canary write test\n");
 			canary_test_write();
 			break;
 		case 1:
-			pr_info("KSW test: triggering canary overflow test\n");
+			pr_info("KSW: test: triggering canary overflow test\n");
 			canary_test_overflow();
 			break;
 		case 2:
-			pr_info("KSW test: triggering local variable corruption test\n");
+			pr_info("KSW: test: triggering local variable corruption test\n");
 			multi_thread_corruption_test();
 			break;
 		case 3:
-			pr_info("KSW test: triggering recursive corruption test\n");
+			pr_info("KSW: test: triggering recursive corruption test\n");
 			/* depth start with 0 */
 			recursive_corruption_test(0);
 			break;
 		default:
-			pr_err("KSW test: Unknown test number %d\n", test_num);
+			pr_err("KSW: test: Unknown test number %d\n", test_num);
 			return -EINVAL;
 		}
 	} else {
-		pr_err("KSW test: invalid command format. Use 'test1', 'test2', or 'test3'.\n");
+		pr_err("KSW: test: invalid command format. Use 'test1', 'test2', or 'test3'.\n");
 		return -EINVAL;
 	}
 
@@ -238,10 +243,10 @@ static int __init kstackwatch_test_init(void)
 {
 	test_proc = proc_create("kstackwatch_test", 0644, NULL, &test_proc_ops);
 	if (!test_proc) {
-		pr_err("KSW test: Failed to create proc entry\n");
+		pr_err("KSW: test: Failed to create proc entry\n");
 		return -ENOMEM;
 	}
-	pr_info("KSW test: Module loaded, use 'cat /proc/kstackwatch_test' for usage\n");
+	pr_info("KSW: test: Module loaded, use 'cat /proc/kstackwatch_test' for usage\n");
 	return 0;
 }
 
@@ -249,7 +254,7 @@ static void __exit kstackwatch_test_exit(void)
 {
 	if (test_proc)
 		remove_proc_entry("kstackwatch_test", NULL);
-	pr_info("KSW test: Module unloaded\n");
+	pr_info("KSW: test: Module unloaded\n");
 }
 
 module_init(kstackwatch_test_init);
