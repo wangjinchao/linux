@@ -1,14 +1,93 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include <linux/fprobe.h>
+#include <linux/hashtable.h>
+#include <linux/hash.h>
+#include <linux/interrupt.h>
 #include <linux/kprobes.h>
+#include <linux/percpu.h>
+#include <linux/sched.h>
+#include <linux/spinlock.h>
 #include <linux/stackprotector.h>
 
 #include "kstackwatch.h"
 
-/* Per-CPU watching state */
-static DEFINE_PER_CPU(int, monitor_depth);
 struct ksw_config *probe_config;
+
+#define DEPTH_HASH_BITS 8
+#define DEPTH_HASH_SIZE (1 << DEPTH_HASH_BITS)
+
+struct depth_entry {
+	pid_t pid;
+	int depth; /* starts from 0 */
+	struct hlist_node node;
+};
+
+static DEFINE_HASHTABLE(depth_hash, DEPTH_HASH_BITS);
+static DEFINE_SPINLOCK(depth_hash_lock);
+
+static int get_recursive_depth(void)
+{
+	struct depth_entry *entry;
+	pid_t pid = current->pid;
+	int depth = 0;
+
+	spin_lock(&depth_hash_lock);
+	hash_for_each_possible(depth_hash, entry, node,
+			       hash_32(pid, DEPTH_HASH_BITS)) {
+		if (entry->pid == pid) {
+			depth = entry->depth;
+			break;
+		}
+	}
+	spin_unlock(&depth_hash_lock);
+	return depth;
+}
+
+static void set_recursive_depth(int depth)
+{
+	struct depth_entry *entry;
+	pid_t pid = current->pid;
+	bool found = false;
+
+	spin_lock(&depth_hash_lock);
+	hash_for_each_possible(depth_hash, entry, node,
+			       hash_32(pid, DEPTH_HASH_BITS)) {
+		if (entry->pid == pid) {
+			entry->depth = depth;
+			found = true;
+			break;
+		}
+	}
+
+	if (!found && depth > 0) {
+		entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
+		if (entry) {
+			entry->pid = pid;
+			entry->depth = depth;
+			hash_add(depth_hash, &entry->node,
+				 hash_32(pid, DEPTH_HASH_BITS));
+		}
+	} else if (found && depth == 0) {
+		hash_del(&entry->node);
+		kfree(entry);
+	}
+	spin_unlock(&depth_hash_lock);
+}
+
+static void reset_recursive_depth(void)
+{
+	struct depth_entry *entry;
+	struct hlist_node *tmp;
+	int bkt;
+
+	spin_lock(&depth_hash_lock);
+	hash_for_each_safe(depth_hash, bkt, tmp, entry, node) {
+		hash_del(&entry->node);
+		kfree(entry);
+	}
+	spin_unlock(&depth_hash_lock);
+}
 
 /* Find canary address in current stack frame */
 static unsigned long ksw_stack_find_canary(struct pt_regs *regs)
@@ -50,8 +129,7 @@ static unsigned long ksw_stack_resolve_offset(struct pt_regs *regs,
 	stack_base = regs->sp;
 	target_addr = stack_base + local_var_offset;
 
-	pr_info("KSW: %s sp:0x%lx offset: %llx, target: 0x%lx\n", __func__,
-		stack_base, local_var_offset, target_addr);
+	pr_debug("KSW: stack resolve offset target: 0x%lx\n", target_addr);
 
 	return target_addr;
 }
@@ -121,13 +199,13 @@ static struct fprobe exit_probe_fprobe;
 static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
 				    unsigned long flags)
 {
-	int *depth, cur_depth;
+	int cur_depth;
 	int ret;
 	u64 watch_addr;
 	u64 watch_len;
 
-	depth = this_cpu_ptr(&monitor_depth);
-	cur_depth = (*depth)++;
+	cur_depth = get_recursive_depth();
+	set_recursive_depth(cur_depth + 1);
 
 	/* depth start from 0 */
 	if (cur_depth != probe_config->depth) {
@@ -155,12 +233,11 @@ static void ksw_stack_exit_handler(struct fprobe *fp, unsigned long ip,
 				   unsigned long ret_ip,
 				   struct ftrace_regs *regs, void *data)
 {
-	int *depth, cur_depth;
+	int cur_depth;
 
-	depth = this_cpu_ptr(&monitor_depth);
-	cur_depth = --(*depth);
+	cur_depth = get_recursive_depth() - 1;
+	set_recursive_depth(cur_depth);
 
-	/* depth start from 0 */
 	if (cur_depth != probe_config->depth) {
 		pr_info("KSW: config_depth:%u cur_depth:%d exit skipping\n",
 			probe_config->depth, cur_depth);
@@ -173,14 +250,9 @@ static void ksw_stack_exit_handler(struct fprobe *fp, unsigned long ip,
 int ksw_stack_init(struct ksw_config *config)
 {
 	int ret;
-	int cpu;
-	int *depth;
 	char *symbuf = NULL;
 
-	for_each_possible_cpu(cpu) {
-		depth = per_cpu_ptr(&monitor_depth, cpu);
-		WRITE_ONCE(*depth, 0);
-	}
+	reset_recursive_depth();
 
 	/* Setup entry probe */
 	memset(&entry_probe, 0, sizeof(entry_probe));
