@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-#include "linux/kern_levels.h"
 #include <asm/hw_breakpoint.h>
 #include <linux/hw_breakpoint.h>
+#include <linux/kern_levels.h>
 #include <linux/kprobes.h>
 #include <linux/printk.h>
 #include <linux/perf_event.h>
@@ -42,7 +42,7 @@ static void ksw_watch_handler(struct perf_event *bp,
 	pr_err("========== KStackWatch: Caught stack corruption =======\n");
 	pr_err("KSW: config %s\n", watch_config->config_str);
 	show_regs(regs);
-	pr_err("========== KStackWatch End ==========\n");
+	pr_err("=================== KStackWatch End ==================\n");
 
 	if (panic_on_catch)
 		panic("KSW: Stack corruption detected");
@@ -76,10 +76,10 @@ static void ksw_watch_on_local_cpu(void *useless)
 	}
 
 	if (bp->attr.bp_addr == (unsigned long)&watch_holder) {
-		pr_info("KSW: watch off CPU %d\n", cpu);
+		pr_debug("KSW: watch off CPU %d\n", cpu);
 	} else {
-		pr_info("KSW: watch on CPU %d at 0x%px (len %llu)\n", cpu,
-			(void *)bp->attr.bp_addr, bp->attr.bp_len);
+		pr_debug("KSW: watch on CPU %d at 0x%px (len %llu)\n", cpu,
+			 (void *)bp->attr.bp_addr, bp->attr.bp_len);
 	}
 }
 
@@ -88,19 +88,16 @@ static void ksw_watch_on_work_fn(struct work_struct *work)
 	struct watch_worker *worker =
 		container_of(work, struct watch_worker, work);
 	int original_cpu = READ_ONCE(worker->original_cpu);
-	int local_cpu = smp_processor_id();
 	call_single_data_t *csd;
 	int cpu;
 
+	pr_debug("KSW: watch original_cpu %d\n", original_cpu);
 	for_each_online_cpu(cpu) {
 		if (cpu == original_cpu)
-			continue;
-		if (cpu == local_cpu)
 			continue;
 		csd = &per_cpu(watch_csd, cpu);
 		smp_call_function_single_async(cpu, csd);
 	}
-	ksw_watch_on_local_cpu(NULL);
 }
 
 int ksw_watch_init(struct ksw_config *config)
@@ -174,9 +171,9 @@ int ksw_watch_on(u64 watch_addr, u64 watch_len)
 	spin_unlock_irqrestore(&watch_lock, flags);
 
 	if (watch_addr == (unsigned long)&watch_holder)
-		pr_info("KSW: watch off starting\n");
+		pr_debug("KSW: watch off starting\n");
 	else
-		pr_info("KSW: watch on starting\n");
+		pr_debug("KSW: watch on starting\n");
 
 	queue_work(system_highpri_wq, &myworker.work);
 	ksw_watch_on_local_cpu(NULL);
