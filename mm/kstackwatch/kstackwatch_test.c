@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
-#include "asm-generic/rwonce.h"
-#include "linux/printk.h"
+#include <linux/compiler.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/module.h>
 #include <linux/prandom.h>
+#include <linux/printk.h>
 #include <linux/proc_fs.h>
 #include <linux/random.h>
 #include <linux/sched.h>
