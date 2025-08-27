@@ -310,7 +310,6 @@ config PER_VMA_LOCK_STATS
 
 	  If in doubt, say N.
 
-
 config KSTACK_WATCH
 	tristate "Kernel Stack Watch"
 	depends on STACKPROTECTOR && HAVE_HW_BREAKPOINT && KPROBES && FPROBE
