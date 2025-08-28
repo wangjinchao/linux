@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include <asm/hw_breakpoint.h>
+#include <asm/smp.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/kern_levels.h>
 #include <linux/kprobes.h>
@@ -21,19 +22,16 @@ static DEFINE_SPINLOCK(watch_lock);
 
 static unsigned long long watch_holder;
 
-static struct watch_worker {
-	struct work_struct work;
-	/*
-	 * caller of watch_on(), invoke ksw_watch_on_local_cpu()
-	 * directly, mark it to skip the later SMP call
-	 */
-	int original_cpu;
-} myworker;
+static struct watch_info {
+	u64 addr;
+	u64 len;
+} watch_info;
 
-static void ksw_watch_on_local_cpu(void *useless);
+static void ksw_watch_on_local_cpu(void *info);
 
 static DEFINE_PER_CPU(call_single_data_t,
-		      watch_csd) = CSD_INIT(ksw_watch_on_local_cpu, NULL);
+		      watch_csd) = CSD_INIT(ksw_watch_on_local_cpu,
+					    &watch_info);
 
 static void ksw_watch_handler(struct perf_event *bp,
 			      struct perf_sample_data *data,
@@ -52,16 +50,18 @@ static void ksw_watch_handler(struct perf_event *bp,
  * set up watchon current CPU
  * addr and len updated by ksw_watch_on() already
  */
-static void ksw_watch_on_local_cpu(void *useless)
+static void ksw_watch_on_local_cpu(void *data)
 {
 	struct perf_event *bp;
+	struct watch_info *watch_info = data;
 	int cpu = smp_processor_id();
 	int ret;
 
 	bp = *per_cpu_ptr(watch_events, cpu);
 	if (!bp)
 		return;
-
+	bp->attr.bp_addr = watch_info->addr;
+	bp->attr.bp_len = watch_info->len;
 	ret = hw_breakpoint_arch_parse(bp, &bp->attr, counter_arch_bp(bp));
 	if (ret) {
 		pr_err("KSW: failed to validate HWBP for CPU %d ret %d\n", cpu,
@@ -83,23 +83,6 @@ static void ksw_watch_on_local_cpu(void *useless)
 	}
 }
 
-static void ksw_watch_on_work_fn(struct work_struct *work)
-{
-	struct watch_worker *worker =
-		container_of(work, struct watch_worker, work);
-	int original_cpu = READ_ONCE(worker->original_cpu);
-	call_single_data_t *csd;
-	int cpu;
-
-	pr_debug("KSW: watch original_cpu %d\n", original_cpu);
-	for_each_online_cpu(cpu) {
-		if (cpu == original_cpu)
-			continue;
-		csd = &per_cpu(watch_csd, cpu);
-		smp_call_function_single_async(cpu, csd);
-	}
-}
-
 int ksw_watch_init(struct ksw_config *config)
 {
 	struct perf_event_attr attr;
@@ -117,7 +100,6 @@ int ksw_watch_init(struct ksw_config *config)
 		return ret;
 	}
 
-	INIT_WORK(&myworker.work, ksw_watch_on_work_fn);
 	watch_config = config;
 	pr_info("KSW: watch inited\n");
 	return 0;
@@ -133,7 +115,6 @@ void ksw_watch_exit(void)
 
 int ksw_watch_on(u64 watch_addr, u64 watch_len)
 {
-	struct perf_event *bp;
 	unsigned long flags;
 	int cpu;
 
@@ -146,27 +127,16 @@ int ksw_watch_on(u64 watch_addr, u64 watch_len)
 
 	/*
 	 * check if already watched
-	 * only need to check one CPU since all share same addr
 	 */
-	bp = *this_cpu_ptr(watch_events);
-	if (bp->attr.bp_addr != 0 &&
-	    bp->attr.bp_addr != (unsigned long)&watch_holder && // installted
-	    watch_addr != (unsigned long)&watch_holder) { //restore
+	if (watch_info.addr != 0 && // not uninit
+	    watch_info.addr != (unsigned long)&watch_holder && // installed
+	    watch_addr != (unsigned long)&watch_holder) { //not restore
 		spin_unlock_irqrestore(&watch_lock, flags);
 		return -EBUSY;
 	}
 
-	/*
-	 * update address for all bp
-	 * simplify the ksw_watch_on_local_cpu and work_fn
-	 */
-	for_each_possible_cpu(cpu) {
-		bp = *per_cpu_ptr(watch_events, cpu);
-		WRITE_ONCE(bp->attr.bp_addr, watch_addr);
-		WRITE_ONCE(bp->attr.bp_len, watch_len);
-	}
-
-	WRITE_ONCE(myworker.original_cpu, smp_processor_id());
+	watch_info.addr = watch_addr;
+	watch_info.len = watch_len;
 
 	spin_unlock_irqrestore(&watch_lock, flags);
 
@@ -175,8 +145,15 @@ int ksw_watch_on(u64 watch_addr, u64 watch_len)
 	else
 		pr_debug("KSW: watch on starting\n");
 
-	queue_work(system_highpri_wq, &myworker.work);
-	ksw_watch_on_local_cpu(NULL);
+	for_each_online_cpu(cpu) {
+		if (cpu == raw_smp_processor_id())
+			ksw_watch_on_local_cpu(&watch_info);
+		else {
+			call_single_data_t *csd = &per_cpu(watch_csd, cpu);
+			smp_call_function_single_async(cpu, csd);
+		}
+	}
+
 	return 0;
 }
 
