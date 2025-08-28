@@ -15,7 +15,7 @@
 struct ksw_config *probe_config;
 
 #define DEPTH_HASH_BITS 8
-#define DEPTH_HASH_SIZE (1 << DEPTH_HASH_BITS)
+#define DEPTH_HASH_SIZE BIT(DEPTH_HASH_BITS)
 
 struct depth_entry {
 	pid_t pid;
