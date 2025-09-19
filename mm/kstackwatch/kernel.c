@@ -10,10 +10,6 @@
 
 #include "kstackwatch.h"
 
-MODULE_AUTHOR("Jinchao Wang");
-MODULE_DESCRIPTION("Kernel Stack Watch");
-MODULE_LICENSE("GPL");
-
 static struct ksw_config *ksw_config;
 static atomic_t config_file_busy = ATOMIC_INIT(0);
 
@@ -41,7 +37,7 @@ static int ksw_start_watching(void)
 	}
 	watching_active = true;
 
-	pr_info("start watching: %s\n", ksw_config->config_str);
+	pr_info("start watching: %s\n", ksw_config->user_input);
 	return 0;
 }
 
@@ -51,86 +47,107 @@ static void ksw_stop_watching(void)
 	ksw_watch_exit();
 	watching_active = false;
 
-	pr_info("stop watching: %s\n", ksw_config->config_str);
+	pr_info("stop watching: %s\n", ksw_config->user_input);
+}
+
+struct param_map {
+	const char *name;       /* long name */
+	const char *short_name; /* short name (2 letters) */
+	size_t offset;          /* offsetof(struct ksw_config, field) */
+	bool is_string;         /* true for char[] */
+};
+
+/* macro generates both long and short name automatically */
+#define PMAP(field, short, is_str) \
+	{ #field, #short, offsetof(struct ksw_config, field), is_str }
+
+static const struct param_map ksw_params[] = {
+	PMAP(func_name,   fn, true),
+	PMAP(func_offset, fo, false),
+	PMAP(depth,       dp, false),
+	PMAP(max_watch,   mw, false),
+	PMAP(sp_offset,   so, false),
+	PMAP(watch_len,   wl, false),
+};
+
+static int ksw_parse_param(struct ksw_config *config, const char *key,
+			   const char *val)
+{
+	const struct param_map *pm = NULL;
+	int ret;
+
+	for (int i = 0; i < ARRAY_SIZE(ksw_params); i++) {
+		if (strcmp(key, ksw_params[i].name) == 0 ||
+		    strcmp(key, ksw_params[i].short_name) == 0) {
+			pm = &ksw_params[i];
+			break;
+		}
+	}
+
+	if (!pm)
+		return -EINVAL;
+
+	if (pm->is_string) {
+		char **dst = (char **)((char *)config + pm->offset);
+		*dst = kstrdup(val, GFP_KERNEL);
+		if (!*dst)
+			return -ENOMEM;
+	} else {
+		ret = kstrtou16(val, 0, (u16 *)((char *)config + pm->offset));
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 
 /*
- * Format of the configuration string:
- *    function+ip_offset[+depth] [local_var_offset:local_var_len]
+ * Configuration string format:
+ *    param_name=<value> [param_name=<value> ...]
  *
- * - function         : name of the target function
- * - ip_offset        : instruction pointer offset within the function
- * - depth            : recursion depth to watch
- * - local_var_offset : offset from the stack pointer at function+ip_offset
- * - local_var_len    : length of the local variable(1,2,4,8)
+ * Required parameters:
+ * - func_name  |fn (str) : target function name
+ * - func_offset|fo (u16) : instruction pointer offset
+ *
+ * Optional parameters:
+ * - depth      |dp (u16) : recursion depth
+ * - max_watch  |mw (u16) : maximum number of watchpoints
+ * - sp_offset  |so (u16) : offset from stack pointer at func_offset
+ * - watch_len  |wl (u16) : watch length (1,2,4,8)
  */
 static int ksw_parse_config(char *buf, struct ksw_config *config)
 {
-	char *func_part, *local_var_part = NULL;
-	char *token;
-	u16 local_var_len;
+	char *part, *key, *val;
+	int ret;
 
+	kfree(config->func_name);
+	kfree(config->user_input);
 	memset(ksw_config, 0, sizeof(*ksw_config));
 
-	/* set the watch type to the default canary-based watching */
-	config->type = WATCH_CANARY;
+	buf = strim(buf);
+	config->user_input = kstrdup(buf, GFP_KERNEL);
+	if (!config->user_input)
+		return -ENOMEM;
 
-	func_part = strim(buf);
-	strscpy(config->config_str, func_part, MAX_CONFIG_STR_LEN);
+	while ((part = strsep(&buf, " \t\n")) != NULL) {
+		if (*part == '\0')
+			continue;
 
-	local_var_part = strchr(func_part, ' ');
-	if (local_var_part) {
-		*local_var_part = '\0'; // terminate the function part
-		local_var_part = strim(local_var_part + 1);
+		key = strsep(&part, "=");
+		val = part;
+		if (!key || !val)
+			continue;
+		ret = ksw_parse_param(config, key, val);
+		if (ret)
+			pr_warn("unsupported param %s=%s", key, val);
 	}
 
-	/* parse the function part: function+ip_offset[+depth] */
-	token = strsep(&func_part, "+");
-	if (!token)
-		goto fail;
-
-	strscpy(config->function, token, MAX_FUNC_NAME_LEN - 1);
-
-	token = strsep(&func_part, "+");
-	if (!token || kstrtou16(token, 0, &config->ip_offset)) {
-		pr_err("failed to parse instruction offset\n");
-		goto fail;
+	if (!config->func_name || !config->func_offset) {
+		pr_err("Missing required parameters: function or func_offset\n");
+		return -EINVAL;
 	}
-
-	token = strsep(&func_part, "+");
-	if (token && kstrtou16(token, 0, &config->depth)) {
-		pr_err("failed to parse depth\n");
-		goto fail;
-	}
-	if (!local_var_part || !(*local_var_part))
-		return 0;
-
-	/* parse the optional local var offset:len */
-	config->type = WATCH_LOCAL_VAR;
-	token = strsep(&local_var_part, ":");
-	if (!token || kstrtou16(token, 0, &config->local_var_offset)) {
-		pr_err("failed to parse local var offset\n");
-		goto fail;
-	}
-
-	if (!local_var_part || kstrtou16(local_var_part, 0, &local_var_len)) {
-		pr_err("failed to parse local var len\n");
-		goto fail;
-	}
-
-	if (local_var_len != 1 && local_var_len != 2 &&
-	    local_var_len != 4 && local_var_len != 8) {
-		pr_err("invalid local var len %u (must be 1,2,4,8)\n",
-		       local_var_len);
-		goto fail;
-	}
-	config->local_var_len = local_var_len;
 
 	return 0;
-fail:
-	pr_err("invalid input: %s\n", config->config_str);
-	config->config_str[0] = '\0';
-	return -EINVAL;
 }
 
 static ssize_t kstackwatch_proc_write(struct file *file,
@@ -175,7 +192,7 @@ static ssize_t kstackwatch_proc_write(struct file *file,
 static int kstackwatch_proc_show(struct seq_file *m, void *v)
 {
 	if (watching_active)
-		seq_printf(m, "%s\n", ksw_config->config_str);
+		seq_printf(m, "%s\n", ksw_config->user_input);
 	else
 		seq_puts(m, "not watching\n");
 
@@ -230,6 +247,8 @@ static void __exit kstackwatch_exit(void)
 		ksw_stop_watching();
 
 	remove_proc_entry("kstackwatch", NULL);
+	kfree(ksw_config->func_name);
+	kfree(ksw_config->user_input);
 	kfree(ksw_config);
 
 	pr_info("module unloaded\n");
@@ -237,3 +256,7 @@ static void __exit kstackwatch_exit(void)
 
 module_init(kstackwatch_init);
 module_exit(kstackwatch_exit);
+
+MODULE_AUTHOR("Jinchao Wang");
+MODULE_DESCRIPTION("Kernel Stack Watch");
+MODULE_LICENSE("GPL");

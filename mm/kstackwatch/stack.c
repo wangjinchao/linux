@@ -9,11 +9,53 @@
 
 #include "kstackwatch.h"
 
-#define INVALID_PID -1
 #define MAX_CANARY_SEARCH_STEPS 128
 static struct kprobe entry_probe;
 static struct fprobe exit_probe;
-static atomic_t ksw_stack_pid = ATOMIC_INIT(INVALID_PID);
+
+static bool probe_enable;
+static u16 probe_generation;
+
+static void ksw_reset_ctx(void)
+{
+	struct ksw_ctx *ctx = &current->ksw_ctx;
+
+	if (ctx->wp)
+		ksw_watch_off(ctx->wp);
+
+	ctx->wp = NULL;
+	ctx->depth = 0;
+	ctx->generation = READ_ONCE(probe_generation);
+}
+
+static bool ksw_stack_check_ctx(bool entry)
+{
+	struct ksw_ctx *ctx = &current->ksw_ctx;
+	u16 cur_enable = READ_ONCE(probe_enable);
+	u16 cur_generation = READ_ONCE(probe_generation);
+	u16 cur_depth, target_depth = ksw_get_config()->depth;
+
+	if (!cur_enable) {
+		ksw_reset_ctx();
+		return false;
+	}
+
+	if (ctx->generation != cur_generation)
+		ksw_reset_ctx();
+
+	if (!entry && !ctx->depth)
+		ksw_reset_ctx();
+
+	if (entry)
+		cur_depth = ctx->depth++;
+	else
+		cur_depth = --ctx->depth;
+
+	if (cur_depth == target_depth)
+		return true;
+	else
+		return false;
+}
 
 static unsigned long ksw_find_stack_canary_addr(struct pt_regs *regs)
 {
@@ -76,22 +118,13 @@ static int ksw_stack_prepare_watch(struct pt_regs *regs,
 	ulong addr;
 	u16 len;
 
-	/* Resolve addresses for all active watches */
-	switch (ksw_get_config()->type) {
-	case WATCH_CANARY:
+	// default is to watch the canary
+	if (!ksw_get_config()->watch_len) {
 		addr = ksw_find_stack_canary_addr(regs);
-		len = sizeof(unsigned long);
-		break;
-
-	case WATCH_LOCAL_VAR:
-		addr = kernel_stack_pointer(regs) +
-		       ksw_get_config()->local_var_offset;
-		len = ksw_get_config()->local_var_len;
-		break;
-
-	default:
-		pr_err("Unknown watch type %d\n", ksw_get_config()->type);
-		return -EINVAL;
+		len = sizeof(ulong);
+	} else {
+		addr = kernel_stack_pointer(regs) + ksw_get_config()->sp_offset;
+		len = ksw_get_config()->watch_len;
 	}
 
 	if (ksw_stack_validate_addr(addr, len)) {
@@ -107,55 +140,45 @@ static int ksw_stack_prepare_watch(struct pt_regs *regs,
 static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
 				    unsigned long flags)
 {
-	struct kstackwatch_ctx *ctx = &current->kstackwatch_ctx;
+	struct ksw_ctx *ctx = &current->ksw_ctx;
 	ulong watch_addr;
 	u16 watch_len;
 	int ret;
 
-	if (ctx->depth++ != ksw_get_config()->depth)
+	if (!ksw_stack_check_ctx(true))
 		return;
 
-	if (atomic_cmpxchg(&ksw_stack_pid, INVALID_PID, current->pid) !=
-	    INVALID_PID)
+	ret = ksw_watch_get(&ctx->wp);
+	if (ret)
 		return;
 
 	ret = ksw_stack_prepare_watch(regs, ksw_get_config(), &watch_addr,
 				      &watch_len);
 	if (ret) {
-		atomic_set(&ksw_stack_pid, INVALID_PID);
 		pr_err("failed to prepare watch target: %d\n", ret);
 		return;
 	}
 
-	ret = ksw_watch_on(watch_addr, watch_len);
+	ret = ksw_watch_on(ctx->wp, watch_addr, watch_len);
 	if (ret) {
-		atomic_set(&ksw_stack_pid, INVALID_PID);
 		pr_err("failed to watch on depth:%d addr:0x%lx len:%u %d\n",
 		       ksw_get_config()->depth, watch_addr, watch_len, ret);
 		return;
 	}
-
-	ctx->watch_addr = watch_addr;
-	ctx->watch_len = watch_len;
-	ctx->watch_on = true;
 }
 
 static void ksw_stack_exit_handler(struct fprobe *fp, unsigned long ip,
 				   unsigned long ret_ip,
 				   struct ftrace_regs *regs, void *data)
 {
-	struct kstackwatch_ctx *ctx = &current->kstackwatch_ctx;
+	struct ksw_ctx *ctx = &current->ksw_ctx;
 
-	if (--ctx->depth != ksw_get_config()->depth)
+	if (!ksw_stack_check_ctx(false))
 		return;
-
-	if (atomic_read(&ksw_stack_pid) != current->pid)
-		return;
-	WARN_ON_ONCE(!ctx->watch_on);
-	WARN_ON_ONCE(ksw_watch_off(ctx->watch_addr, ctx->watch_len));
-	ctx->watch_on = false;
-
-	atomic_set(&ksw_stack_pid, INVALID_PID);
+	if (ctx->wp) {
+		ksw_watch_off(ctx->wp);
+		ctx->wp = NULL;
+	}
 }
 
 int ksw_stack_init(void)
@@ -164,8 +187,8 @@ int ksw_stack_init(void)
 	char *symbuf = NULL;
 
 	memset(&entry_probe, 0, sizeof(entry_probe));
-	entry_probe.symbol_name = ksw_get_config()->function;
-	entry_probe.offset = ksw_get_config()->ip_offset;
+	entry_probe.symbol_name = ksw_get_config()->func_name;
+	entry_probe.offset = ksw_get_config()->func_offset;
 	entry_probe.post_handler = ksw_stack_entry_handler;
 	ret = register_kprobe(&entry_probe);
 	if (ret) {
@@ -175,7 +198,7 @@ int ksw_stack_init(void)
 
 	memset(&exit_probe, 0, sizeof(exit_probe));
 	exit_probe.exit_handler = ksw_stack_exit_handler;
-	symbuf = (char *)ksw_get_config()->function;
+	symbuf = (char *)ksw_get_config()->func_name;
 
 	ret = register_fprobe_syms(&exit_probe, (const char **)&symbuf, 1);
 	if (ret < 0) {
@@ -183,12 +206,16 @@ int ksw_stack_init(void)
 		unregister_kprobe(&entry_probe);
 		return ret;
 	}
+	probe_generation++;
+	probe_enable = true;
 
 	return 0;
 }
 
 void ksw_stack_exit(void)
 {
+	probe_generation++;
+	probe_enable = false;
 	unregister_fprobe(&exit_probe);
 	unregister_kprobe(&entry_probe);
 }

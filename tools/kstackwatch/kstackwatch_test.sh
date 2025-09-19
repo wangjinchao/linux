@@ -14,14 +14,16 @@ usage() {
 run_test() {
 	local test_num=$1
 	case "$test_num" in
-	0) echo "canary_test_write+0x19" >/proc/kstackwatch
+	0) echo "fn=canary_test_write fo=0x19" >/proc/kstackwatch
+	# 0) echo "fn=canary_test_overflow fo=0x19 mw=1" >/proc/kstackwatch
 	   echo "test0" >/proc/kstackwatch_test ;;
-	1) echo "canary_test_overflow+0x1a" >/proc/kstackwatch
+	1) echo "fn=canary_test_overflow fo=0x19" >/proc/kstackwatch
 	   echo "test1" >/proc/kstackwatch_test ;;
-	2) echo "silent_corruption_victim+0x32 0:8" >/proc/kstackwatch
+	2) echo "fn=silent_corruption_victim fo=0x28 wl=8" >/proc/kstackwatch
 	   echo "test2" >/proc/kstackwatch_test ;;
-	3) echo "recursive_corruption_test+0x21+3 0:8" >/proc/kstackwatch
-	   echo "test3" >/proc/kstackwatch_test ;;
+	3) echo "fn=recursive_corruption_test fo=0x1b dp=3 wl=8 so=0" >/proc/kstackwatch
+	   echo "test3" >/proc/kstackwatch_test
+	   ;;
 	*) usage
 	   exit 1 ;;
 	esac

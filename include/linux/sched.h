@@ -1483,7 +1483,7 @@ struct task_struct {
 #endif
 
 #if IS_ENABLED(CONFIG_KSTACK_WATCH)
-	struct kstackwatch_ctx		kstackwatch_ctx;
+	struct ksw_ctx		ksw_ctx;
 #endif
 
 #if IS_ENABLED(CONFIG_KUNIT)

@@ -2,37 +2,38 @@
 #ifndef _KSTACKWATCH_H
 #define _KSTACKWATCH_H
 
+#include <linux/llist.h>
+#include <linux/percpu.h>
+#include <linux/perf_event.h>
 #include <linux/types.h>
 
-#define MAX_FUNC_NAME_LEN 64
 #define MAX_CONFIG_STR_LEN 128
 
-enum watch_type {
-	WATCH_CANARY = 0,
-	WATCH_LOCAL_VAR,
-};
-
 struct ksw_config {
-	/* function part */
-	char function[MAX_FUNC_NAME_LEN];
-	u16 ip_offset;
+	char *func_name;
 	u16 depth;
 
-	/* local var, useless for canary watch */
-	/* offset from rsp at function+ip_offset */
-	u16 local_var_offset;
+	/*
+	 * watched variable info:
+	 * - func_offset : instruction offset in the function, typically the
+	 *                 assignment of the watched variable, where ksw
+	 *                 registers a kprobe post-handler.
+	 * - sp_offset   : offset from stack pointer at func_offset. Usually 0.
+	 * - watch_len   : size of the watched variable (1, 2, 4, or 8 bytes).
+	 */
+	u16 func_offset;
+	u16 sp_offset;
+	u16 watch_len;
+
+	u16 max_watch;
 
 	/*
 	 * local var size (1,2,4,8 bytes)
 	 * it will be the watching len
 	 */
-	u16 local_var_len;
-
-	/* easy for understand*/
-	enum watch_type type;
 
 	/* save to show */
-	char config_str[MAX_CONFIG_STR_LEN];
+	char *user_input;
 };
 
 // singleton, only modified in kernel.c
@@ -43,10 +44,18 @@ int ksw_stack_init(void);
 void ksw_stack_exit(void);
 
 /* watch management */
+struct ksw_watchpoint {
+	struct perf_event *__percpu *event;
+	call_single_data_t __percpu *csd;
+	struct perf_event_attr attr;
+	struct llist_node node; // for atomic watch_on and off
+	struct list_head list; // for cpu online and offline
+};
 int ksw_watch_init(void);
 void ksw_watch_exit(void);
-int ksw_watch_on(ulong watch_addr, u16 watch_len);
-int ksw_watch_off(ulong watch_addr, u16 watch_len);
+int ksw_watch_get(struct ksw_watchpoint **out_wp);
+int ksw_watch_on(struct ksw_watchpoint *wp, ulong watch_addr, u16 watch_len);
+int ksw_watch_off(struct ksw_watchpoint *wp);
 void ksw_watch_show(void);
 void ksw_watch_fire(void);
 

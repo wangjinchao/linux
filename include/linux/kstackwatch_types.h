@@ -3,11 +3,11 @@
 #define _LINUX_KSTACK_WATCH_TYPES_H
 #include <linux/types.h>
 
-struct kstackwatch_ctx {
-	ulong watch_addr;
-	u16 watch_len;
+struct ksw_watchpoint;
+struct ksw_ctx {
+	struct ksw_watchpoint *wp;
 	u16 depth;
-	bool watch_on;
+	u16 generation;
 };
 
 #endif /* _LINUX_KSTACK_WATCH_TYPES_H */
