@@ -23,7 +23,7 @@ run_test() {
 	2) echo fn=test_recursive_depth fo=0x1b dp=3 wl=8 so=0 >/proc/kstackwatch
 	   echo test2 >/proc/kstackwatch_test
 	   ;;
-	3) echo fn=test_silent_victim fo=0x45 so=8 wl=8 >/proc/kstackwatch
+	3) echo fn=test_silent_victim fo=0x4e so=0 wl=8 >/proc/kstackwatch
 	   echo test3 >/proc/kstackwatch_test
 	   ;;
 	4) echo fn=test_multi_recursive_victim fo=0x28 wl=8 >/proc/kstackwatch

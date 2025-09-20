@@ -3,15 +3,15 @@
 
 #include <linux/delay.h>
 #include <linux/kthread.h>
+#include <linux/list.h>
 #include <linux/module.h>
 #include <linux/prandom.h>
 #include <linux/printk.h>
 #include <linux/proc_fs.h>
+#include <linux/random.h>
+#include <linux/spinlock.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
-#include <linux/list.h>
-#include <linux/spinlock.h>
-#include <linux/random.h>
 
 #include "kstackwatch.h"
 
@@ -21,18 +21,29 @@ MODULE_LICENSE("GPL");
 
 static struct proc_dir_entry *test_proc;
 
-#define BUFFER_SIZE 64
+#define BUFFER_SIZE 32
+#define CORRUPT_SIZE 8 /* BUFFER_SIZE / 4 */
 #define MAX_DEPTH 6
 #define JUNK_SZ 256
 #define VICTIM_BUF_SZ 128
-#define NUM_WORKERS 4
+#define NUM_WORKERS 10
 #define NODE_BUF_SZ 32
 
-/* global variables for original Silent corruption test (test3) */
-static u64 *g_corrupt_ptr;
+struct work_node {
+	ulong *ptr;
+	struct completion done;
+	struct list_head list;
+};
+struct completion work_res;
+
+static LIST_HEAD(work_list);
+static DEFINE_MUTEX(work_mutex);
+
+static struct task_struct *unwitting_thread;
+static struct task_struct *worker_threads[NUM_WORKERS];
 
 /*
- * Test Case 0: Write to the canary position directly (Canary Test)
+ * Test Case 0: Write to the watch addr directly
  */
 static void test_watch_fire(void)
 {
@@ -48,7 +59,7 @@ static void test_watch_fire(void)
 }
 
 /*
- * Test Case 1: Stack Overflow (Canary Test)
+ * Test Case 1: Overflow Canary
  */
 static void test_canary_overflow(void)
 {
@@ -64,7 +75,7 @@ static void test_canary_overflow(void)
 }
 
 /*
- * Test Case 2: Recursive Call Corruption
+ * Test Case 2: test watch on a specify depth
  */
 static void test_recursive_depth(int depth)
 {
@@ -81,85 +92,116 @@ static void test_recursive_depth(int depth)
 	pr_info("exit of %s depth:%d\n", __func__, depth);
 }
 
-/*
- * Test Case 3: Silent Corruption
- */
-
-static void test_silent_buggy(int i)
+static void test_silent_buggy(int seq_id, int sdepth, int ddepth)
 {
-	u64 buf[BUFFER_SIZE];
+	ulong buf[BUFFER_SIZE];
 	bool trigger;
+	struct work_node *node;
+
+	if (sdepth < ddepth) {
+		test_silent_buggy(seq_id, sdepth + 1, ddepth);
+		return;
+	}
 
 	for (int j = 0; j < BUFFER_SIZE; j++)
 		buf[j] = 0x01;
 
-	WRITE_ONCE(g_corrupt_ptr, buf);
-	trigger = (get_random_u32() % 100) < 5;
-
-	/* buggy: return without resetting g_corrupt_ptr */
-	if (trigger)
+	node = kmalloc(sizeof(*node), GFP_KERNEL);
+	if (!node)
 		return;
 
-	while (true) {
-		bool wait = false;
+	init_completion(&node->done);
+	node->ptr = buf;
+	mutex_lock(&work_mutex);
+	list_add(&node->list, &work_list);
+	mutex_unlock(&work_mutex);
+	complete(&work_res);
 
-		for (int j = 0; j < BUFFER_SIZE / 4; j++) {
-			if (!buf[j])
-				wait = true;
-		}
-		if (!wait)
-			break;
-		usleep_range(1000, 2000);
+	trigger = (get_random_u32() % 100) < 10;
+
+	/* buggy: return without wait for completion */
+	if (trigger) {
+		pr_info("trigger buggy %d\n", seq_id);
+		return;
 	}
-	WRITE_ONCE(g_corrupt_ptr, NULL);
+
+	wait_for_completion(&node->done);
+	kfree(node);
 }
 
-static void test_silent_victim(int i)
+static void test_silent_victim(int seq_id, int sdepth, int ddepth)
 {
-	u64 buf[BUFFER_SIZE];
+	ulong buf[BUFFER_SIZE];
+	bool trigger;
+	struct work_node *node;
 
 	for (int j = 0; j < BUFFER_SIZE; j++)
-		buf[j] = 0xdeadbeaf;
+		buf[j] = 0xdeadbeef + sdepth;
 
 	usleep_range(1000, 2000);
-
 	for (int j = 0; j < BUFFER_SIZE; j++) {
-		if (buf[j] != 0xdeadbeaf) {
-			pr_warn("%s %d unhappy buf[%d]=0x%llx\n", __func__, i,
-				j, buf[j]);
-			return;
+		if (buf[j] != (0xdeadbeef + sdepth)) {
+			pr_warn("victim[%d][%d]: unhappy buf[%d]=0x%lx\n",
+				seq_id, sdepth, j, buf[j]);
+			break;
 		}
 	}
 
-	pr_info("%s %d happy\n", __func__, i);
+	// trigger always true; keep same stack size as buggy
+	trigger = (get_random_u32() % 100) < 100;
+	if (!trigger) {
+		node = (struct work_node *)buf;
+		list_add(&node->list, &work_list);
+		return;
+	}
+
+	pr_info("victim[%d][%d]: happy\n", seq_id, sdepth);
+	if (sdepth < ddepth)
+		test_silent_victim(seq_id, sdepth + 1, ddepth);
 }
 
 static int test_silent_unwit(void *data)
 {
-	u64 *local_ptr;
+	struct work_node *node;
 
 	while (!kthread_should_stop()) {
-		usleep_range(1000, 2000);
-		local_ptr = READ_ONCE(g_corrupt_ptr);
-		if (!local_ptr)
-			continue;
+		wait_for_completion(&work_res);
 
-		// do not overwrite the victim's prologue
-		for (int i = 0; i < BUFFER_SIZE / 4; i++)
-			local_ptr[i] = 0xabcdabcd;
-		WRITE_ONCE(g_corrupt_ptr, NULL);
-	};
+		while (true) {
+			mutex_lock(&work_mutex);
+			node = list_first_entry_or_null(&work_list,
+							struct work_node, list);
+			if (node)
+				list_del(&node->list);
+			mutex_unlock(&work_mutex);
+			if (!node)
+				break; /* no more nodes, exit inner loop */
+
+			/* skip if already completed */
+			if (completion_done(&node->done))
+				continue;
+			usleep_range(500, 1000);
+
+			for (int i = 0; i < CORRUPT_SIZE; i++)
+				node->ptr[i] = 0xabcdabcd;
+
+			complete(&node->done);
+		}
+	}
 
 	return 0;
 }
 
-static void test_silent_corrupt(void)
+/*
+ * Test Case 3: Silent Corruption (1 worker, 0 depth)
+ */
+static void test_silent_corruption(void)
 {
 	struct task_struct *unwitting;
 	int i;
 
-	pr_info("entry of %s\n", __func__);
-	WRITE_ONCE(g_corrupt_ptr, NULL);
+	pr_info("entry of %s cpu:%d\n", __func__, smp_processor_id());
+	init_completion(&work_res);
 
 	unwitting = kthread_run(test_silent_unwit, NULL, "unwit");
 	if (IS_ERR(unwitting)) {
@@ -167,14 +209,73 @@ static void test_silent_corrupt(void)
 		return;
 	}
 
-	// trigger rate is 5%
-	for (i = 0; i < 20; i++) {
-		test_silent_buggy(i);
-		test_silent_victim(i);
+	// trigger rate is 10%
+	for (i = 0; i < 10; i++) {
+		test_silent_buggy(i, 0, 0);
+		test_silent_victim(i, 0, 0);
 	}
 
 	/* stop unwitting to avoid leaving extra thread running */
 	kthread_stop(unwitting);
+	pr_info("exit of %s\n", __func__);
+}
+
+/*
+ * Worker thread function for test4
+ */
+static int test_multi_worker_thread(void *data)
+{
+	int seq_id = (long)data;
+	int round = 0;
+
+	while (!kthread_should_stop()) {
+		round++;
+		test_silent_buggy(seq_id, 0, 10);
+		test_silent_victim(seq_id, 0, 10);
+	}
+
+	return 0;
+}
+
+/*
+ * Test Case 4: Multi-threaded Recursive Corruption (20 workers, 10 depth)
+ */
+static void test_multi_recursive_uar(void)
+{
+	int i;
+
+	pr_info("entry of %s\n", __func__);
+
+	/* start unwitting thread */
+	unwitting_thread = kthread_run(test_silent_unwit, NULL, "unwit");
+	if (IS_ERR(unwitting_thread)) {
+		pr_err("failed to create unwitting thread\n");
+		return;
+	}
+
+	for (i = 0; i < NUM_WORKERS; i++) {
+		worker_threads[i] = kthread_run(test_multi_worker_thread,
+						(void *)(long)i, "worker_%d",
+						i);
+		if (IS_ERR(worker_threads[i])) {
+			pr_err("failed to create worker thread %d\n", i);
+			worker_threads[i] = NULL;
+		}
+	}
+
+	usleep_range(3000, 5000);
+	if (unwitting_thread && !IS_ERR(unwitting_thread)) {
+		kthread_stop(unwitting_thread);
+		unwitting_thread = NULL;
+	}
+
+	for (i = 0; i < NUM_WORKERS; i++) {
+		if (worker_threads[i]) {
+			kthread_stop(worker_threads[i]);
+			worker_threads[i] = NULL;
+		}
+	}
+
 	pr_info("exit of %s\n", __func__);
 }
 
@@ -214,11 +315,11 @@ static ssize_t test_proc_write(struct file *file, const char __user *buffer,
 			break;
 		case 3:
 			pr_info("test silent corrupt\n");
-			test_silent_corrupt();
+			test_silent_corruption();
 			break;
 		case 4:
 			pr_info("test multiple recursive corrupt\n");
-			test_multi_recursive_corrupt();
+			test_multi_recursive_uar();
 			break;
 		default:
 			pr_err("Unknown test number %d\n", test_num);
@@ -239,11 +340,11 @@ static ssize_t test_proc_read(struct file *file, char __user *buffer,
 		"KStackWatch Simplified Test Module\n"
 		"============ usuage ==============\n"
 		"Usage:\n"
-		"echo test0 > /proc/kstackwatch_test - test watch fire\n"
-		"echo test1 > /proc/kstackwatch_test - test canary overflow\n"
-		"echo test2 > /proc/kstackwatch_test - test recursive corrupt\n"
-		"echo test3 > /proc/kstackwatch_test - test silent corrupt\n"
-		"echo test4 > /proc/kstackwatch_test - test complex corrupt\n";
+		"echo test{i} > /proc/kstackwatch_test\n"
+		" test1 - test canary overflow\n"
+		" test2 - test recursive corruption\n"
+		" test3 - test silent corruption\n"
+		" test4 - test multiple thread recursive corruption\n";
 
 	return simple_read_from_buffer(buffer, count, pos, usage,
 				       strlen(usage));

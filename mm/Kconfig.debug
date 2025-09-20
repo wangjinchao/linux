@@ -312,7 +312,7 @@ config PER_VMA_LOCK_STATS
 
 config KSTACK_WATCH
 	tristate "Kernel Stack Watch"
-	depends on HAVE_HW_BREAKPOINT && KPROBES && FPROBE
+	depends on HAVE_HW_BREAKPOINT && KPROBES && FPROBE && STACKTRACE
 	select HAVE_REINSTALL_HW_BREAKPOINT
 	help
 	  A lightweight real-time debugging tool to detect stack corruption.
