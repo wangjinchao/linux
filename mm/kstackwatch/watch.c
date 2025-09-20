@@ -227,7 +227,12 @@ void ksw_watch_exit(void)
 /* self debug function */
 void ksw_watch_show(void)
 {
-	struct ksw_watchpoint *wp;
+	struct ksw_watchpoint *wp = current->ksw_ctx.wp;
+
+	if (!wp) {
+		pr_info("nothing to show\n");
+		return;
+	}
 
 	wp = list_first_entry(&all_wp_list, struct ksw_watchpoint, list);
 	pr_info("watch target bp_addr: 0x%llx len:%llu\n", wp->attr.bp_addr,
@@ -239,10 +244,16 @@ EXPORT_SYMBOL_GPL(ksw_watch_show);
 void ksw_watch_fire(void)
 {
 	struct ksw_watchpoint *wp;
+	char *ptr;
 
-	wp = list_first_entry(&all_wp_list, struct ksw_watchpoint, list);
-	char *ptr = (char *)wp->attr.bp_addr;
+	wp = current->ksw_ctx.wp;
 
+	if (!wp) {
+		pr_info("nothing to fire\n");
+		return;
+	}
+
+	ptr = (char *)wp->attr.bp_addr;
 	pr_warn("watch triggered immediately\n");
 	*ptr = 0x42; // This should trigger immediately for any bp_len
 }

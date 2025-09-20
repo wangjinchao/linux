@@ -192,7 +192,7 @@ int ksw_stack_init(void)
 	entry_probe.post_handler = ksw_stack_entry_handler;
 	ret = register_kprobe(&entry_probe);
 	if (ret) {
-		pr_err("Failed to register kprobe ret %d\n", ret);
+		pr_err("failed to register kprobe ret %d\n", ret);
 		return ret;
 	}
 
