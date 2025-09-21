@@ -1,33 +1,38 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0
 
-echo "IMPORTANT: Before running, make sure you have updated the offset values!"
+echo "IMPORTANT: Before running, make sure you have updated the config values!"
 
 usage() {
-	echo "Usage: $0 [0-3]"
-	echo "  0  - Canary Write Test"
-	echo "  1  - Canary Overflow Test"
-	echo "  2  - Silent Corruption Test"
-	echo "  3  - Recursive Corruption Test"
+	echo "Usage: $0 [0-5]"
+	echo "  0  - test watch fire"
+	echo "  1  - test canary overflow"
+	echo "  2  - test recursive depth"
+	echo "  3  - test silent corruption"
+	echo "  4  - test multi-threaded silent corruption"
+	echo "  5  - test multi-threaded overflow"
 }
 
 run_test() {
 	local test_num=$1
 	case "$test_num" in
-	0) echo fn=test_watch_fire fo=0x18 wl=8 >/proc/kstackwatch
+	0) echo fn=test_watch_fire fo=0x29 wl=8 >/proc/kstackwatch
 	   echo test0 > /proc/kstackwatch_test
 	   ;;
-	1) echo fn=test_canary_overflow fo=0x12 >/proc/kstackwatch
+	1) echo fn=test_canary_overflow fo=0x15 >/proc/kstackwatch
 	   echo test1 >/proc/kstackwatch_test
 	   ;;
-	2) echo fn=test_recursive_depth fo=0x1b dp=3 wl=8 so=0 >/proc/kstackwatch
+	2) echo fn=test_recursive_depth fo=0x2f dp=3 wl=8 so=0 >/proc/kstackwatch
 	   echo test2 >/proc/kstackwatch_test
 	   ;;
-	3) echo fn=test_silent_victim fo=0x4e so=0 wl=8 >/proc/kstackwatch
+	3) echo fn=test_mthread_victim fo=0x49 wl=8 >/proc/kstackwatch
 	   echo test3 >/proc/kstackwatch_test
 	   ;;
-	4) echo fn=test_multi_recursive_victim fo=0x28 wl=8 >/proc/kstackwatch
+	4) echo fn=test_mthread_victim fo=0x49 wl=8 >/proc/kstackwatch
 	   echo test4 >/proc/kstackwatch_test
+	   ;;
+	5) echo fn=test_mthread_victim fo=0x49 wl=8 >/proc/kstackwatch
+	   echo test5 >/proc/kstackwatch_test
 	   ;;
 	*) usage
 	   exit 1 ;;

@@ -9,7 +9,6 @@
 
 #include "kstackwatch.h"
 
-
 static LLIST_HEAD(free_wp_list);
 static LIST_HEAD(all_wp_list);
 static DEFINE_MUTEX(all_wp_mutex);
@@ -19,7 +18,7 @@ bool panic_on_catch;
 module_param(panic_on_catch, bool, 0644);
 MODULE_PARM_DESC(panic_on_catch, "panic immediately on corruption catch");
 
-#define TRAMPOLINE_NAME "fprobe_return"
+#define TRAMPOLINE_NAME "ftrace_return_to_handler"
 #define TRAMPOLINE_DEPTH 16
 
 /* Resolved once, then reused */
@@ -54,6 +53,7 @@ static void ksw_watch_handler(struct perf_event *bp,
 
 	nr = stack_trace_save_regs(regs, entries, TRAMPOLINE_DEPTH, 0);
 	for (i = 0; i < nr; i++) {
+		//ignore trampoline
 		if (ksw_watch_in_trampoline(entries[i]))
 			return;
 	}
@@ -81,7 +81,6 @@ static void ksw_watch_on_local_cpu(void *info)
 	if (!bp) {
 		local_irq_restore(flags);
 		return;
-
 	}
 
 	ret = modify_wide_hw_breakpoint_local(bp, &wp->attr);
@@ -98,7 +97,7 @@ static int ksw_watch_cpu_online(unsigned int cpu)
 	mutex_lock(&all_wp_mutex);
 	list_for_each_entry(wp, &all_wp_list, list) {
 		bp = perf_event_create_kernel_counter(&wp->attr, cpu, NULL,
-						      ksw_watch_handler, NULL);
+						      ksw_watch_handler, wp);
 		if (IS_ERR(bp)) {
 			pr_warn("%s failed to create watch on CPU %d: %ld\n",
 				__func__, cpu, PTR_ERR(bp));
@@ -208,7 +207,7 @@ static int ksw_watch_alloc(void)
 		wp->attr.bp_len = sizeof(ulong);
 		wp->attr.bp_type = HW_BREAKPOINT_W;
 		wp->event = register_wide_hw_breakpoint(&wp->attr,
-							ksw_watch_handler, NULL);
+							ksw_watch_handler, wp);
 		if (IS_ERR((void *)wp->event)) {
 			ret = PTR_ERR((void *)wp->event);
 			free_percpu(wp->csd);
@@ -244,7 +243,8 @@ int ksw_watch_init(void)
 		return -EBUSY;
 
 	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
-					"kstackwatch:online", ksw_watch_cpu_online,
+					"kstackwatch:online",
+					ksw_watch_cpu_online,
 					ksw_watch_cpu_offline);
 	if (ret < 0) {
 		ksw_watch_free();
