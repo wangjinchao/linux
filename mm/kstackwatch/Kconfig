@@ -22,6 +22,7 @@ config KSTACKWATCH_PROFILING
 	  stopping. Useful for performance tuning, not for production use.
 
 	  If unsure, say N.
+
 config KSTACKWATCH_TEST
 	tristate "KStackWatch Test Module"
 	depends on KSTACKWATCH
