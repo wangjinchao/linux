@@ -175,6 +175,7 @@ static void ksw_stack_exit_handler(struct fprobe *fp, unsigned long ip,
 
 	if (!ksw_stack_check_ctx(false))
 		return;
+
 	if (ctx->wp) {
 		ksw_watch_off(ctx->wp);
 		ctx->wp = NULL;
@@ -202,20 +203,21 @@ int ksw_stack_init(void)
 
 	ret = register_fprobe_syms(&exit_probe, (const char **)&symbuf, 1);
 	if (ret < 0) {
-		pr_err("register_fprobe_syms fail %d\n", ret);
+		pr_err("failed to register fprobe ret %d\n", ret);
 		unregister_kprobe(&entry_probe);
 		return ret;
 	}
-	probe_generation++;
-	probe_enable = true;
+
+	WRITE_ONCE(probe_generation, READ_ONCE(probe_generation) + 1);
+	WRITE_ONCE(probe_enable, true);
 
 	return 0;
 }
 
 void ksw_stack_exit(void)
 {
-	probe_generation++;
-	probe_enable = false;
+	WRITE_ONCE(probe_enable, false);
+	WRITE_ONCE(probe_generation, READ_ONCE(probe_generation) + 1);
 	unregister_fprobe(&exit_probe);
 	unregister_kprobe(&entry_probe);
 }

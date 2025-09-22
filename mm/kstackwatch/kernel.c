@@ -54,7 +54,7 @@ struct param_map {
 	const char *name;       /* long name */
 	const char *short_name; /* short name (2 letters) */
 	size_t offset;          /* offsetof(struct ksw_config, field) */
-	bool is_string;         /* true for char[] */
+	bool is_string;         /* true for string */
 };
 
 /* macro generates both long and short name automatically */

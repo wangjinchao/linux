@@ -25,12 +25,8 @@ struct ksw_config {
 	u16 sp_offset;
 	u16 watch_len;
 
+	/* max number of hwbps that can be used */
 	u16 max_watch;
-
-	/*
-	 * local var size (1,2,4,8 bytes)
-	 * it will be the watching len
-	 */
 
 	/* save to show */
 	char *user_input;

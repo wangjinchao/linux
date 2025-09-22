@@ -77,12 +77,14 @@ static void ksw_watch_on_local_cpu(void *info)
 
 	local_irq_save(flags);
 	cpu = raw_smp_processor_id();
-	bp = *per_cpu_ptr(wp->event, cpu);
+	bp = per_cpu(*wp->event, cpu);
 	if (!bp) {
 		local_irq_restore(flags);
 		return;
 	}
 
+	// ensure attr update is visible
+	smp_rmb();
 	ret = modify_wide_hw_breakpoint_local(bp, &wp->attr);
 	local_irq_restore(flags);
 	WARN(ret, "fail to reinstall HWBP on CPU%d ret %d", cpu, ret);
@@ -129,13 +131,13 @@ static int ksw_watch_cpu_offline(unsigned int cpu)
 
 static void ksw_watch_update(struct ksw_watchpoint *wp, ulong addr, u16 len)
 {
-	int cpu;
 	call_single_data_t *csd;
+	int cpu;
 
 	wp->attr.bp_addr = addr;
 	wp->attr.bp_len = len;
 
-	/* ensure watchpoint update is visible to other CPUs before IPI */
+	/* ensure attr update is visible to other CPUs before IPI */
 	smp_wmb();
 
 	for_each_online_cpu(cpu) {
@@ -158,7 +160,7 @@ int ksw_watch_get(struct ksw_watchpoint **out_wp)
 		return -EBUSY;
 
 	wp = llist_entry(node, struct ksw_watchpoint, node);
-	WARN_ON(wp->attr.bp_addr != (u64)&holder);
+	WARN_ON_ONCE(wp->attr.bp_addr != (u64)&holder);
 
 	*out_wp = wp;
 	return 0;
@@ -171,7 +173,7 @@ int ksw_watch_on(struct ksw_watchpoint *wp, ulong watch_addr, u16 watch_len)
 
 int ksw_watch_off(struct ksw_watchpoint *wp)
 {
-	WARN_ON(wp->attr.bp_addr == (u64)&holder);
+	WARN_ON_ONCE(wp->attr.bp_addr == (u64)&holder);
 	ksw_watch_update(wp, (ulong)&holder, sizeof(ulong));
 	llist_add(&wp->node, &free_wp_list);
 	return 0;
@@ -215,7 +217,9 @@ static int ksw_watch_alloc(void)
 			return success > 0 ? success : ret;
 		}
 		llist_add(&wp->node, &free_wp_list);
+		mutex_lock(&all_wp_mutex);
 		list_add(&wp->list, &all_wp_list);
+		mutex_unlock(&all_wp_mutex);
 		success++;
 	}
 
@@ -226,12 +230,14 @@ static void ksw_watch_free(void)
 {
 	struct ksw_watchpoint *wp, *tmp;
 
+	mutex_lock(&all_wp_mutex);
 	list_for_each_entry_safe(wp, tmp, &all_wp_list, list) {
 		list_del(&wp->list);
 		unregister_wide_hw_breakpoint(wp->event);
 		free_percpu(wp->csd);
 		kfree(wp);
 	}
+	mutex_unlock(&all_wp_mutex);
 }
 
 int ksw_watch_init(void)
@@ -270,7 +276,6 @@ void ksw_watch_show(void)
 		return;
 	}
 
-	wp = list_first_entry(&all_wp_list, struct ksw_watchpoint, list);
 	pr_info("watch target bp_addr: 0x%llx len:%llu\n", wp->attr.bp_addr,
 		wp->attr.bp_len);
 }
