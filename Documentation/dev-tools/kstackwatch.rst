@@ -20,7 +20,7 @@ Main features:
 * Lockless design, usable in any context
 * Depth filter for recursive calls
 * Minimal impact on reproducibility
-* Flexible ``procfs`` configuration with ``key=val`` syntax
+* Flexible procfs configuration with key=val syntax
 
 Usage
 =====
@@ -40,16 +40,18 @@ Required parameters
 +==============+========+=========================================+
 | func_name    | fn     | Name of the target function             |
 +--------------+--------+-----------------------------------------+
-| func_offset  | fo     | Instruction pointer offset (hex)        |
+| func_offset  | fo     | Instruction pointer offset              |
 +--------------+--------+-----------------------------------------+
 
-Optional parameters (default 0)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Optional parameters
+~~~~~~~~~~~~~~~~~~~~
+
+Default 0 and can be omitted.
 
 +--------------+--------+------------------------------------------------+
 | Parameter    | Short  | Description                                    |
 +==============+========+================================================+
-| depth        | dp     | Recursion depth filter (default 0)             |
+| depth        | dp     | Recursion depth filter                         |
 +--------------+--------+------------------------------------------------+
 | max_watch    | mw     | Maximum number of concurrent watchpoints       |
 |              |        | (default 0, capped by available hardware       |
@@ -57,9 +59,9 @@ Optional parameters (default 0)
 +--------------+--------+------------------------------------------------+
 | sp_offset    | so     | Watching addr offset from stack pointer        |
 +--------------+--------+------------------------------------------------+
-| watch_len    | wl     | Watch length in bytes (1, 2, 4, 8, or 0)       |
+| watch_len    | wl     | Watch length in bytes (1, 2, 4, 8, or 0),      |
 |              |        | 0 means automatically watch the stack canary   |
-|              |        | 0 will ignore the ``sp_offset`` parameter      |
+|              |        | and ignore the ``sp_offset`` parameter         |
 +--------------+--------+------------------------------------------------+
 
 
@@ -69,6 +71,7 @@ Example
 Consider ``test4`` in ``kstackwatch_test.sh``. Run the test4 directly:
 
 .. code-block:: bash
+
 	echo test4 >/proc/kstackwatch_test
 
 Sometimes, ``test_mthread_victim()`` might report that its ``buf[0]`` was
@@ -97,7 +100,7 @@ unhappy, its source code is:
 		return NULL;
 	}
 
-From the source code, its unhappyness is because the ``buf`` array was
+From the source code, its unhappyness is because the ``buf[0]`` was
 modified unexpected.
 
 KStackWatch can be used to find the exact location of this corruption.
@@ -154,17 +157,19 @@ time between the assignment and the watchpoint setup.
 So ffffffff815ce0a9 is selected for cleaner logs. If a false negative is
 suspected, the test can be run multiple times to catch the corruption.
 The required offset is calculated from the beginning of the function:
+
 ``func_offset`` is 0x49 (ffffffff815ce0a9 - ffffffff815ce060).
 
 And other parameters:
-* The ``depth`` is 0, as ``test_mthread_victim`` is not recursive.
-* The ``max_watch`` is 0 to use all available hardware breakpoints, since
-    the function may is called in multiple threads concurrently.
-* The ``sp_offset`` is 0 because ``buf`` is located at the top of the
-    stack frame, buf==sp while i=0.
+
+* The ``depth`` is 0, as test_mthread_victim is not recursive
+* The ``max_watch`` is 0 to use all available hwbps
+  since it is called in multiple threads concurrently.
+* The ``sp_offset`` is 0 because ``buf`` is located at the top of the stack
 * The ``watch_len`` is 8, for the size of a ``ulong`` on x86_64.
 
 Parameters with a value of 0 can be omitted as they are defaults.
+
 Configure the watch with the following command:
 
 .. code-block:: bash
@@ -179,7 +184,7 @@ Then, rerun the test:
 
 the dmesg log will show the following:
 
-.. code-block:: log
+.. code-block:: text
 
 	[    9.308476] kstackwatch: ========== KStackWatch: Caught stack corruption =======
 	[    9.308477] kstackwatch: config fn=test_mthread_victim fo=0x49 wl=8
@@ -228,7 +233,7 @@ location where the corruption occurred.
 
 Note the log sequence: KStackWatch reports the corruption before the victim
 function signals unhappy. This is also earlier than when __stack_chk_fail would
-report the issue in a stack canary corruption case (e.g., test 1).
+report the issue in a stack canary corruption case.
 
 More usage examples and corruption scenarios are provided in
 ``kstackwatch_test.sh`` and ``mm/kstackwatch/test.c``.
