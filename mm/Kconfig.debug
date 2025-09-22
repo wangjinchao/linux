@@ -311,13 +311,10 @@ config PER_VMA_LOCK_STATS
 	  If in doubt, say N.
 
 config KSTACK_WATCH
-	tristate "Kernel Stack Watch"
+	bool "Kernel Stack Watch"
 	depends on HAVE_HW_BREAKPOINT && KPROBES && FPROBE && STACKTRACE
-	select HAVE_REINSTALL_HW_BREAKPOINT
 	help
-	  A lightweight real-time debugging tool to detect stack corruption.
-	  It can watch either the canary or local variable and tracks
-	  the recursive depth of the monitored function.
+	  A lightweight real-time debugging tool to detect stack corrupting.
 
 	  If unsure, say N.
 
@@ -325,8 +322,8 @@ config KSTACK_WATCH_TEST
 	tristate "KStackWatch Test Module"
 	depends on KSTACK_WATCH
 	help
-	  This module provides controlled stack exhaustion and overflow scenarios
-	  to verify the functionality of KStackWatch. It is particularly useful
-	  for development and validation of the KStachWatch mechanism.
+	  This module provides controlled stack corruption scenarios to verify
+	  the functionality of KStackWatch. It is useful for development and
+	  validation of the KStachWatch mechanism.
 
 	  If unsure, say N.

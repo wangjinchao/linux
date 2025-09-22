@@ -83,8 +83,6 @@ static void ksw_watch_on_local_cpu(void *info)
 		return;
 	}
 
-	// ensure attr update is visible
-	smp_rmb();
 	ret = modify_wide_hw_breakpoint_local(bp, &wp->attr);
 	local_irq_restore(flags);
 	WARN(ret, "fail to reinstall HWBP on CPU%d ret %d", cpu, ret);
@@ -136,9 +134,6 @@ static void ksw_watch_update(struct ksw_watchpoint *wp, ulong addr, u16 len)
 
 	wp->attr.bp_addr = addr;
 	wp->attr.bp_len = len;
-
-	/* ensure attr update is visible to other CPUs before IPI */
-	smp_wmb();
 
 	for_each_online_cpu(cpu) {
 		if (cpu == raw_smp_processor_id()) {

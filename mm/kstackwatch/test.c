@@ -22,7 +22,7 @@ MODULE_LICENSE("GPL");
 static struct proc_dir_entry *test_proc;
 
 #define BUFFER_SIZE 16
-#define MAX_DEPTH 10
+#define MAX_DEPTH 6
 
 struct work_node {
 	ulong *ptr;
@@ -97,7 +97,7 @@ static struct work_node *test_mthread_buggy(int thread_id, int seq_id)
 
 	trigger = (get_random_u32() % 100) < 10;
 	if (trigger)
-		return node;
+		return node; /* let the caller handle cleanup */
 
 	wait_for_completion(&node->done);
 	kfree(node);
@@ -166,8 +166,6 @@ static int test_mthread_worker(void *data)
 	int loop_count;
 	struct work_node *node;
 
-	// make sure global variables are visible
-	rmb();
 	loop_count = READ_ONCE(global_loop_count);
 
 	for (int i = 0; i < loop_count; i++) {
@@ -189,9 +187,6 @@ static void test_mthread_case(int num_workers, int loop_count, int corrupt_size)
 
 	WRITE_ONCE(global_loop_count, loop_count);
 	WRITE_ONCE(global_corrupt_size, corrupt_size);
-
-	// make sure global variables are visible
-	wmb();
 
 	init_completion(&work_res);
 	workers = kmalloc_array(num_workers, sizeof(void *), GFP_KERNEL);

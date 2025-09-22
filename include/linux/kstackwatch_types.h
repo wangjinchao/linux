@@ -6,6 +6,7 @@
 struct ksw_watchpoint;
 struct ksw_ctx {
 	struct ksw_watchpoint *wp;
+	ulong sp;
 	u16 depth;
 	u16 generation;
 };

@@ -24,6 +24,7 @@ static void ksw_reset_ctx(void)
 		ksw_watch_off(ctx->wp);
 
 	ctx->wp = NULL;
+	ctx->sp = 0;
 	ctx->depth = 0;
 	ctx->generation = READ_ONCE(probe_generation);
 }
@@ -141,9 +142,18 @@ static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
 				    unsigned long flags)
 {
 	struct ksw_ctx *ctx = &current->ksw_ctx;
+	ulong stack_pointer;
 	ulong watch_addr;
 	u16 watch_len;
 	int ret;
+
+	stack_pointer = kernel_stack_pointer(regs);
+
+	/*
+	 * triggered more than once, may be in a loop
+	 */
+	if (ctx->wp && ctx->sp == stack_pointer)
+		return;
 
 	if (!ksw_stack_check_ctx(true))
 		return;
@@ -165,6 +175,8 @@ static void ksw_stack_entry_handler(struct kprobe *p, struct pt_regs *regs,
 		       ksw_get_config()->depth, watch_addr, watch_len, ret);
 		return;
 	}
+
+	ctx->sp = stack_pointer;
 }
 
 static void ksw_stack_exit_handler(struct fprobe *fp, unsigned long ip,
@@ -179,6 +191,7 @@ static void ksw_stack_exit_handler(struct fprobe *fp, unsigned long ip,
 	if (ctx->wp) {
 		ksw_watch_off(ctx->wp);
 		ctx->wp = NULL;
+		ctx->sp = 0;
 	}
 }
 
