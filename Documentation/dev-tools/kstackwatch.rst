@@ -26,7 +26,7 @@ Usage
 =====
 
 KStackWatch is configured through ``/proc/kstackwatch`` using a key=value
-format. Both long and short forms are supported.
+format. Both long and short forms are supported. Write null to disable.
 
 The function name and the instruction offset where the watchpoint should be
 placed must be known. This information can be obtained from ``objdump`` or
@@ -230,6 +230,12 @@ the dmesg log will show the following:
 
 The line ``RIP: 0010:test_mthread_corrupting+0x4f/0xe0`` shows the exact
 location where the corruption occurred.
+
+Clean the watch:
+
+.. code-block:: bash
+
+	echo > /proc/kstackwatch
 
 Note the log sequence: KStackWatch reports the corruption before the victim
 function signals unhappy. This is also earlier than when __stack_chk_fail would
