@@ -131,6 +131,10 @@ struct release_task_post {
 	struct pid *pids[PIDTYPE_MAX];
 };
 
+#ifdef CONFIG_KWATCH
+extern void kwatch_ctx_release(void);
+#endif
+
 static void __unhash_process(struct release_task_post *post, struct task_struct *p,
 			     bool group_dead)
 {
@@ -991,6 +995,11 @@ void __noreturn do_exit(long code)
 	if (unlikely(current->pi_state_cache))
 		kfree(current->pi_state_cache);
 #endif
+
+#ifdef CONFIG_KWATCH
+	kwatch_ctx_release();
+#endif
+
 	/*
 	 * Make sure we are holding no locks:
 	 */

@@ -999,6 +999,10 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->reported_split_lock = 0;
 #endif
 
+#ifdef CONFIG_KWATCH
+	memset(&tsk->kwatch_ctx, 0, sizeof(tsk->kwatch_ctx));
+#endif
+
 #ifdef CONFIG_SCHED_MM_CID
 	tsk->mm_cid.cid = MM_CID_UNSET;
 	tsk->mm_cid.active = 0;

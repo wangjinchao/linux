@@ -22,6 +22,7 @@
 #include <linux/sem_types.h>
 #include <linux/shm.h>
 #include <linux/kmsan_types.h>
+#include <linux/kwatch_types.h>
 #include <linux/mutex_types.h>
 #include <linux/plist_types.h>
 #include <linux/hrtimer_types.h>
@@ -65,6 +66,7 @@ struct capture_control;
 struct cfs_rq;
 struct fs_struct;
 struct futex_pi_state;
+struct kwatch_ctx;
 struct io_context;
 struct io_uring_task;
 struct mempolicy;
@@ -1620,6 +1622,10 @@ struct task_struct {
 	 * cores
 	 */
 	struct callback_head		l1d_flush_kill;
+#endif
+
+#ifdef CONFIG_KWATCH
+	struct kwatch_ctx		kwatch_ctx;
 #endif
 
 #ifdef CONFIG_RV
