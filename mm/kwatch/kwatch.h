@@ -40,8 +40,8 @@ const struct kwatch_config *kwatch_get_config(void);
 int kwatch_hwbp_prealloc(void);
 void kwatch_hwbp_free(void);
 int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp);
-void kwatch_hwbp_on(struct kwatch_watchpoint *wp, ulong addr, u16 len,
-		    enum kwatch_access_type type);
+void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, ulong addr, u16 len,
+		     enum kwatch_access_type type);
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp);
 
 int kwatch_probe_start(void);

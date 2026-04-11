@@ -7,8 +7,8 @@
 
 #include "kwatch.h"
 
-static struct kprobe entry_probe;
-static struct kretprobe exit_probe;
+static struct kprobe kwatch_entry_probe;
+static struct kretprobe kwatch_exit_probe;
 
 static bool probe_enable;
 static u16 probe_generation;
@@ -87,7 +87,7 @@ static void kwatch_fentry_handler(struct kprobe *p, struct pt_regs *regs,
 		return;
 	}
 
-	kwatch_hwbp_on(ctx->wp, watch_addr, watch_len, type);
+	kwatch_hwbp_arm(ctx->wp, watch_addr, watch_len, type);
 	ctx->sp = stack_pointer;
 }
 
@@ -106,22 +106,22 @@ int kwatch_probe_start(void)
 	const struct kwatch_config *cfg = kwatch_get_config();
 	int ret;
 
-	memset(&entry_probe, 0, sizeof(entry_probe));
-	entry_probe.symbol_name = cfg->func_name;
-	entry_probe.offset = cfg->func_offset;
-	entry_probe.post_handler = kwatch_fentry_handler;
+	memset(&kwatch_entry_probe, 0, sizeof(kwatch_entry_probe));
+	kwatch_entry_probe.symbol_name = cfg->func_name;
+	kwatch_entry_probe.offset = cfg->func_offset;
+	kwatch_entry_probe.post_handler = kwatch_fentry_handler;
 
-	ret = register_kprobe(&entry_probe);
+	ret = register_kprobe(&kwatch_entry_probe);
 	if (ret)
 		return ret;
 
-	memset(&exit_probe, 0, sizeof(exit_probe));
-	exit_probe.handler = kwatch_fexit_handler;
-	exit_probe.kp.symbol_name = kwatch_get_config()->func_name;
+	memset(&kwatch_exit_probe, 0, sizeof(kwatch_exit_probe));
+	kwatch_exit_probe.handler = kwatch_fexit_handler;
+	kwatch_exit_probe.kp.symbol_name = kwatch_get_config()->func_name;
 
-	ret = register_kretprobe(&exit_probe);
+	ret = register_kretprobe(&kwatch_exit_probe);
 	if (ret < 0) {
-		unregister_kprobe(&entry_probe);
+		unregister_kprobe(&kwatch_entry_probe);
 		return ret;
 	}
 
@@ -134,6 +134,6 @@ void kwatch_probe_stop(void)
 {
 	WRITE_ONCE(probe_enable, false);
 	WRITE_ONCE(probe_generation, READ_ONCE(probe_generation) + 1);
-	unregister_kretprobe(&exit_probe);
-	unregister_kprobe(&entry_probe);
+	unregister_kretprobe(&kwatch_exit_probe);
+	unregister_kprobe(&kwatch_entry_probe);
 }
