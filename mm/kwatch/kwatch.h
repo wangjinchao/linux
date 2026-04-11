@@ -18,6 +18,9 @@ struct kwatch_watchpoint {
 	struct perf_event_attr attr;
 	struct llist_node node; // for atomic watch_on and off
 	struct list_head list; // for cpu online and offline
+
+	/* Async Reclaim State */
+	atomic_t pending_ipis;
 };
 
 struct kwatch_config {
@@ -45,6 +48,6 @@ int kwatch_probe_start(void);
 void kwatch_probe_stop(void);
 void kwatch_ctx_release(void);
 void kwatch_action_trigger(struct perf_event *bp, struct pt_regs *regs);
-bool is_kwatch_handler(struct perf_event *event);
+bool kwatch_is_handler(struct perf_event *event);
 
 #endif /* _MM_KWATCH_H */

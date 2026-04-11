@@ -69,6 +69,7 @@ static void kwatch_hwbp_on_local(void *info)
 	struct perf_event *bp;
 	ulong flags;
 	int cpu;
+	bool is_reclaim = (wp->attr.bp_addr == (ulong)&dummy_holder);
 
 	local_irq_save(flags);
 	cpu = raw_smp_processor_id();
@@ -77,6 +78,11 @@ static void kwatch_hwbp_on_local(void *info)
 		WARN_ONCE(modify_wide_hw_breakpoint_local(bp, &wp->attr),
 			  "KWatch: reinstall HWBP failed on CPU%d", cpu);
 	local_irq_restore(flags);
+
+	if (is_reclaim) {
+		if (atomic_dec_and_test(&wp->pending_ipis))
+			llist_add(&wp->node, &free_wp_list);
+	}
 }
 
 static int kwatch_cpu_online(unsigned int cpu)
@@ -134,7 +140,8 @@ void kwatch_hwbp_on(struct kwatch_watchpoint *wp, ulong addr, u16 len,
 {
 	int cur_cpu = raw_smp_processor_id();
 	call_single_data_t *csd;
-	int cpu;
+	int cpu, target_count = 0;
+	bool is_reclaim = (addr == (ulong)&dummy_holder);
 
 	wp->attr.bp_addr = addr;
 	wp->attr.bp_len = len;
@@ -142,6 +149,13 @@ void kwatch_hwbp_on(struct kwatch_watchpoint *wp, ulong addr, u16 len,
 			    (type == KWATCH_ACCESS_R)  ? HW_BREAKPOINT_R :
 			    (type == KWATCH_ACCESS_RW) ? HW_BREAKPOINT_RW :
 							 HW_BREAKPOINT_W;
+
+	/* FAST PATH OPTIMIZATION: Only track IPIs if we are reclaiming */
+	if (is_reclaim) {
+		for_each_online_cpu(cpu)
+			target_count++;
+		atomic_set(&wp->pending_ipis, target_count);
+	}
 
 	for_each_online_cpu(cpu) {
 		/* remote cpu first */
@@ -157,8 +171,7 @@ void kwatch_hwbp_on(struct kwatch_watchpoint *wp, ulong addr, u16 len,
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
 {
 	kwatch_hwbp_on(wp, (ulong)&dummy_holder, sizeof(ulong),
-		       KWATCH_ACCESS_R);
-	llist_add(&wp->node, &free_wp_list);
+		       KWATCH_ACCESS_W);
 	return 0;
 }
 
