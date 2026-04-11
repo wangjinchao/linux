@@ -9,7 +9,6 @@
 #define MAX_CANARY_SEARCH_STEPS 128
 
 struct kwatch_stack_cfg {
-	u16 auto_canary;
 	u16 sp_offset;
 	u16 watch_len;
 	enum kwatch_access_type access_type;
@@ -29,11 +28,9 @@ static int stack_config_parse(void *mode_config, const char *key, const char *va
 {
 	struct kwatch_stack_cfg *stack_config = mode_config;
 
-	if (!strcmp(key, "ac"))
-		return kstrtou16(val, 0, &stack_config->auto_canary);
-	if (!strcmp(key, "so"))
+	if (!strcmp(key, "sp_offset"))
 		return kstrtou16(val, 0, &stack_config->sp_offset);
-	if (!strcmp(key, "wl"))
+	if (!strcmp(key, "watch_len"))
 		return kstrtou16(val, 0, &stack_config->watch_len);
 
 	return -EINVAL;
@@ -63,11 +60,9 @@ static int stack_config_show(void *mode_config, char *buf, size_t size)
 		return 0;
 
 	len = snprintf(buf, size,
-		       "auto_canary=%u\n"
 		       "sp_offset=%u\n"
 		       "watch_len=%u\n"
 		       "access_type=%d\n",
-		       cfg->auto_canary,
 		       cfg->sp_offset,
 		       cfg->watch_len,
 		       cfg->access_type);
@@ -77,46 +72,6 @@ static int stack_config_show(void *mode_config, char *buf, size_t size)
 	 * the caller doesn't increment their offset beyond the actual buffer.
 	 */
 	return (len < size) ? len : size - 1;
-}
-
-static unsigned long kwatch_find_stack_canary_addr(struct pt_regs *regs)
-{
-	unsigned long *stack_ptr, *stack_end, *stack_base;
-	unsigned long expected_canary;
-	unsigned int i;
-#ifdef CONFIG_FRAME_POINTER
-	unsigned long *fp = NULL;
-#endif
-
-	stack_ptr = (unsigned long *)kernel_stack_pointer(regs);
-	stack_base = (unsigned long *)(current->stack);
-	stack_end = (unsigned long *)((char *)current->stack + THREAD_SIZE);
-
-#ifdef CONFIG_FRAME_POINTER
-	fp = __builtin_frame_address(0);
-	if (fp > stack_ptr && fp < stack_end)
-		stack_end = fp;
-#endif
-
-#ifdef CONFIG_STACKPROTECTOR
-	expected_canary = current->stack_canary;
-#else
-	pr_err("no canary without CONFIG_STACKPROTECTOR\n");
-	return 0;
-#endif
-
-	if (stack_ptr < stack_base || stack_ptr >= stack_end)
-		return 0;
-
-	for (i = 0; i < MAX_CANARY_SEARCH_STEPS; i++) {
-		if (&stack_ptr[i] >= stack_end)
-			break;
-		if (stack_ptr[i] == expected_canary)
-			return (unsigned long)&stack_ptr[i];
-	}
-
-	pr_err("canary not found in first %d steps\n", MAX_CANARY_SEARCH_STEPS);
-	return 0;
 }
 
 static int kwatch_stack_resolve(struct pt_regs *regs, void *mode_config,
@@ -130,15 +85,8 @@ static int kwatch_stack_resolve(struct pt_regs *regs, void *mode_config,
 	unsigned long stack_start = (unsigned long)current->stack;
 	unsigned long stack_end = stack_start + THREAD_SIZE;
 
-	if (stack_config->auto_canary) {
-		addr = kwatch_find_stack_canary_addr(regs);
-		if (!addr)
-			return -EINVAL;
-		len = sizeof(ulong);
-	} else {
-		addr = kernel_stack_pointer(regs) + stack_config->sp_offset;
-		len = stack_config->watch_len ? stack_config->watch_len : sizeof(ulong);
-	}
+	addr = kernel_stack_pointer(regs) + stack_config->sp_offset;
+	len = stack_config->watch_len ? stack_config->watch_len : sizeof(ulong);
 
 	if (!addr || addr < stack_start || (addr + len) > stack_end) {
 		pr_err("invalid stack addr:0x%lx len:%u\n", addr, len);
