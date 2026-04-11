@@ -146,9 +146,9 @@ void kwatch_hwbp_on(struct kwatch_watchpoint *wp, ulong addr, u16 len,
 	wp->attr.bp_addr = addr;
 	wp->attr.bp_len = len;
 	wp->attr.bp_type = (type == KWATCH_ACCESS_X)  ? HW_BREAKPOINT_X :
-			    (type == KWATCH_ACCESS_R)  ? HW_BREAKPOINT_R :
-			    (type == KWATCH_ACCESS_RW) ? HW_BREAKPOINT_RW :
-							 HW_BREAKPOINT_W;
+			   (type == KWATCH_ACCESS_R)  ? HW_BREAKPOINT_R :
+			   (type == KWATCH_ACCESS_RW) ? HW_BREAKPOINT_RW :
+							HW_BREAKPOINT_W;
 
 	/* FAST PATH OPTIMIZATION: Only track IPIs if we are reclaiming */
 	if (is_reclaim) {
