@@ -44,6 +44,7 @@ static int kwatch_start_watching(void)
 static void kwatch_stop_watching(void)
 {
 	kwatch_probe_stop();
+	synchronize_rcu();
 	kwatch_hwbp_free();
 	watching_active = false;
 }
