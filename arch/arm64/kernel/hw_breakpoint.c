@@ -734,12 +734,20 @@ static u64 get_distance_from_watchpoint(unsigned long addr, u64 val,
 		return 0;
 }
 
+#ifdef CONFIG_KWATCH
+extern bool kwatch_is_handler(struct perf_event *event);
+#endif
+
 static int watchpoint_report(struct perf_event *wp, unsigned long addr,
 			     struct pt_regs *regs)
 {
 	int step = is_default_overflow_handler(wp);
 	struct arch_hw_breakpoint *info = counter_arch_bp(wp);
 
+#ifdef CONFIG_KWATCH
+	if (kwatch_is_handler(wp))
+		step = 1;
+#endif
 	info->trigger = addr;
 
 	/*
