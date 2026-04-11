@@ -6,8 +6,6 @@
 
 #include "mode.h"
 
-#define MAX_CANARY_SEARCH_STEPS 128
-
 struct kwatch_stack_cfg {
 	u16 sp_offset;
 	u16 watch_len;
