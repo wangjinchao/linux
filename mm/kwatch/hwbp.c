@@ -58,7 +58,7 @@ static void kwatch_hwbp_handler(struct perf_event *bp,
 	pr_warn("========== KWatch   End =======\n");
 }
 
-bool is_kwatch_handler(struct perf_event *event)
+bool is_kwatch_is_handler(struct perf_event *event)
 {
 	return unlikely(event->overflow_handler == kwatch_hwbp_handler);
 }
