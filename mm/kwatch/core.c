@@ -46,6 +46,8 @@ static void kwatch_stop_watching(void)
 {
 	kwatch_probe_stop();
 	kwatch_hwbp_free();
+	kwatch_mode_uninit();
+
 	watching_active = false;
 }
 

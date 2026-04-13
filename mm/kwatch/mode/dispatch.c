@@ -7,30 +7,20 @@
 
 extern const struct kwatch_mode_ops stack_mode_ops;
 
-static enum kwatch_mode_type kwatch_mode_type;
-/* The Registry */
-static const struct kwatch_mode_ops *mode_registry[] = {
-	[KWATCH_MODE_STACK] = &stack_mode_ops,
-};
-
 static const struct kwatch_mode_ops *kwatch_mode_ops;
-
-static const struct kwatch_mode_ops *
-kwatch_mode_lookup(enum kwatch_mode_type type)
-{
-	if (type >= ARRAY_SIZE(mode_registry))
-		return NULL;
-	return mode_registry[type];
-}
 
 int kwatch_mode_init(const char *mode)
 {
 	if (!strcmp(mode, "stack"))
-		kwatch_mode_type = KWATCH_MODE_STACK;
+		kwatch_mode_ops = &stack_mode_ops;
 	else
 		return -EINVAL;
-	kwatch_mode_ops = kwatch_mode_lookup(kwatch_mode_type);
 	return 0;
+}
+
+void kwatch_mode_uninit(void)
+{
+	kwatch_mode_ops = NULL;
 }
 
 int kwatch_mode_config_parse(const char *key, const char *val)

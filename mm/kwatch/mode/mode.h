@@ -4,6 +4,7 @@
 #include <linux/ptrace.h>
 
 int kwatch_mode_init(const char *mode);
+void kwatch_mode_uninit(void);
 int kwatch_mode_config_parse(const char *key, const char *val);
 int kwatch_mode_config_validate(void);
 int kwatch_mode_config_show(char *buf, size_t size);
