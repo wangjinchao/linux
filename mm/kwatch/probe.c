@@ -60,7 +60,7 @@ static bool kwatch_check_ctx(bool entry)
 static void kwatch_fentry_handler(struct kprobe *p, struct pt_regs *regs,
 				  unsigned long flags)
 {
-	kwatch_config *cfg = kwatch_get_config();
+	struct kwatch_config *cfg = kwatch_get_config();
 	struct kwatch_ctx *ctx = &current->kwatch_ctx;
 	ulong stack_pointer;
 	ulong watch_addr;

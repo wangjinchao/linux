@@ -36,7 +36,7 @@ struct kwatch_config {
 	void *mode_config;
 };
 
-const struct kwatch_config *kwatch_get_config(void);
+struct kwatch_config *kwatch_get_config(void);
 int kwatch_hwbp_prealloc(void);
 void kwatch_hwbp_free(void);
 int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp);

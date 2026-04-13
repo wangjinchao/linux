@@ -282,7 +282,7 @@ static void __exit kwatch_exit(void)
 	pr_info("module unloaded\n");
 }
 
-const struct kwatch_config *kwatch_get_config(void)
+struct kwatch_config *kwatch_get_config(void)
 {
 	return kwatch_config;
 }
