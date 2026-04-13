@@ -9,9 +9,10 @@
 #include <linux/uaccess.h>
 
 #include "kwatch.h"
+#include "mode/mode.h"
 
 static atomic_t dbgfs_config_busy = ATOMIC_INIT(0);
-static struct kwatch_config *kwatch_config;
+static struct kwatch_config kwatch_config;
 static struct dentry *dbgfs_config;
 static struct dentry *dbgfs_dir;
 static bool watching_active;
@@ -24,13 +25,13 @@ static int kwatch_start_watching(void)
 	 * Watch init will preallocate the HWBP,
 	 * so it must happen before stack init
 	 */
-	ret = kwatch_hwbp_prealloc();
+	ret = kwatch_hwbp_prealloc(kwatch_config.max_watch);
 	if (ret) {
 		pr_err("kwatch_hwbp_prealloc ret: %d\n", ret);
 		return ret;
 	}
 
-	ret = kwatch_probe_start();
+	ret = kwatch_probe_start(&kwatch_config);
 	if (ret) {
 		pr_err("kwatch_probe_start ret: %d\n", ret);
 		kwatch_hwbp_free();
@@ -44,18 +45,8 @@ static int kwatch_start_watching(void)
 static void kwatch_stop_watching(void)
 {
 	kwatch_probe_stop();
-	synchronize_rcu();
 	kwatch_hwbp_free();
 	watching_active = false;
-}
-
-static void kwatch_cfg_free(struct kwatch_config *cfg)
-{
-	if (!cfg)
-		return;
-
-	kfree(cfg->func_name);
-	kfree(cfg);
 }
 
 static int kwatch_config_parse_kv(struct kwatch_config *cfg, const char *key,
@@ -63,25 +54,14 @@ static int kwatch_config_parse_kv(struct kwatch_config *cfg, const char *key,
 {
 	int ret = 0;
 
-	if (!strcmp(key, "func_name")) {
-		kfree(cfg->func_name);
-		cfg->func_name = kstrdup(val, GFP_KERNEL);
-		if (!cfg->func_name)
-			return -ENOMEM;
-	} else if (!strcmp(key, "func_offset")) {
-		ret = kstrtou16(val, 0, &cfg->func_offset);
-	} else if (!strcmp(key, "mode")) {
-		if (!strcmp(val, "stack")) {
-			cfg->mode_type = KWATCH_MODE_STACK;
-			cfg->mode_ops = kwatch_mode_lookup(KWATCH_MODE_STACK);
-			cfg->mode_config = cfg->mode_ops->mode_config_alloc();
-		}
-	} else if (cfg->mode_ops && cfg->mode_ops->mode_config_parse) {
-		ret = cfg->mode_ops->mode_config_parse(cfg, key, val);
-	} else {
-		pr_err("KWatch: Unknown parameter '%s'\n", key);
-		ret = -EINVAL;
-	}
+	if (!strcmp(key, "func_name"))
+		strscpy(kwatch_config.func_name, val);
+	else if (!strcmp(key, "func_offset"))
+		ret = kstrtou16(val, 0, &kwatch_config.func_offset);
+	else if (!strcmp(key, "mode"))
+		ret = kwatch_mode_init(val);
+	else
+		ret = kwatch_mode_config_parse(key, val);
 
 	return ret;
 }
@@ -95,14 +75,7 @@ static int kwatch_config_parse(char *buf, struct kwatch_config *cfg)
 	 * kwatch_stop_watching() halts execution, but we must clear old
 	 * parameters and free old plugin memory before accepting new ones.
 	 */
-	kfree(cfg->func_name);
-	cfg->func_name = NULL;
-	cfg->func_offset = 0;
-
-	if (cfg->mode_ops && cfg->mode_ops->mode_config_free)
-		cfg->mode_ops->mode_config_free(cfg->mode_config);
-	cfg->mode_ops = NULL;
-
+	memset(cfg, 0, sizeof(*cfg));
 	/* Tokenize and route */
 	while ((token = strsep(&buf, " \t\n")) != NULL) {
 		if (!*token)
@@ -122,22 +95,14 @@ static int kwatch_config_parse(char *buf, struct kwatch_config *cfg)
 	}
 
 	/* Two-Phase Commit: Validation Phase */
-	if (!cfg->func_name) {
+	if (strlen(kwatch_config.func_name)) {
 		pr_err("KWatch: Missing required target function (fn=)\n");
 		return -EINVAL;
 	}
 
-	if (!cfg->mode_ops) {
-		pr_err("KWatch: No execution mode specified (mode=)\n");
-		return -EINVAL;
-	}
-
-	if (cfg->mode_ops->mode_config_validate) {
-		ret = cfg->mode_ops->mode_config_validate(cfg);
-		if (ret) {
-			pr_err("KWatch: Plugin validation failed: %d\n", ret);
-			return ret;
-		}
+	if (kwatch_mode_config_validate()) {
+		pr_err("KWatch: Plugin validation failed: %d\n", ret);
+		return ret;
 	}
 
 	return 0;
@@ -168,22 +133,15 @@ static ssize_t kwatch_dbgfs_read(struct file *file, char __user *user_buf,
 				"func_name=%s\n"
 				"func_offset=%u\n"
 				"depth=%u\n"
-				"sp_offset=%u\n"
 				"max_watch=%u\n"
 				"access_type=%d\n",
-				kwatch_config->func_name ?: "(none)",
-				kwatch_config->func_offset,
-				kwatch_config->depth,
-				kwatch_config->sp_offset,
-				kwatch_config->max_watch,
-				kwatch_config->mode_type);
+				kwatch_config.func_name,
+				kwatch_config.func_offset,
+				kwatch_config.depth,
+				kwatch_config.max_watch,
+				kwatch_config.access_type);
 
-		/* Delegate to Plugin Plane to print mode_config variables */
-		if (kwatch_config->mode_ops && kwatch_config->mode_ops->mode_config_show) {
-			len += kwatch_config->mode_ops->mode_config_show(kwatch_config,
-								    out_buf + len,
-								    sizeof(out_buf) - len);
-		}
+		kwatch_mode_config_show(out_buf + len, sizeof(out_buf) - len);
 	} else {
 		len = snprintf(out_buf, sizeof(out_buf), "not watching\n");
 	}
@@ -214,7 +172,7 @@ static ssize_t kwatch_dbgfs_write(struct file *file, const char __user *buffer,
 		return count;
 	}
 
-	ret = kwatch_config_parse(input, kwatch_config);
+	ret = kwatch_config_parse(input, &kwatch_config);
 	if (ret) {
 		pr_err("Failed to parse config %d\n", ret);
 		return ret;
@@ -242,11 +200,7 @@ static int __init kwatch_init(void)
 {
 	int ret = 0;
 
-	kwatch_config = kzalloc_obj(*kwatch_config);
-	if (!kwatch_config) {
-		ret = -ENOMEM;
-		goto err_alloc;
-	}
+	memset(&kwatch_config, 0, sizeof(kwatch_config));
 
 	dbgfs_dir = debugfs_create_dir("kwatch", NULL);
 	if (!dbgfs_dir) {
@@ -268,23 +222,14 @@ err_file:
 	debugfs_remove_recursive(dbgfs_dir);
 	dbgfs_dir = NULL;
 err_dir:
-	kfree(kwatch_config);
-	kwatch_config = NULL;
-err_alloc:
 	return ret;
 }
 
 static void __exit kwatch_exit(void)
 {
+	kwatch_stop_watching();
 	debugfs_remove_recursive(dbgfs_dir);
-	if (kwatch_config)
-		kwatch_cfg_free(kwatch_config);
 	pr_info("module unloaded\n");
-}
-
-struct kwatch_config *kwatch_get_config(void)
-{
-	return kwatch_config;
 }
 
 module_init(kwatch_init);

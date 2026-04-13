@@ -66,7 +66,7 @@ struct capture_control;
 struct cfs_rq;
 struct fs_struct;
 struct futex_pi_state;
-struct kwatch_ctx;
+struct kwatch_tsk_ctx;
 struct io_context;
 struct io_uring_task;
 struct mempolicy;
@@ -1625,7 +1625,7 @@ struct task_struct {
 #endif
 
 #ifdef CONFIG_KWATCH
-	struct kwatch_ctx		kwatch_ctx;
+	struct kwatch_tsk_ctx		kwatch_tsk_ctx;
 #endif
 
 #ifdef CONFIG_RV

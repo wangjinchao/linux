@@ -1,21 +1,25 @@
 // SPDX-License-Identifier: GPL-2.0
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/kprobes.h>
 #include <linux/fprobe.h>
 #include <linux/sched.h>
 
 #include "kwatch.h"
+#include "mode/mode.h"
 
-static struct kprobe kwatch_entry_probe;
-static struct kretprobe kwatch_exit_probe;
+struct kwatch_probe_ctx {
+	struct kprobe kp;
+	struct kretprobe rp;
+	const struct kwatch_config *cfg;
 
-static bool probe_enable;
-static u16 probe_generation;
+	bool enable;
+	u16 generation;
+};
 
-void kwatch_ctx_release(void)
+static struct kwatch_probe_ctx kwatch_probe_ctx;
+
+void kwatch_tsk_ctx_reset(void)
 {
-	struct kwatch_ctx *ctx = &current->kwatch_ctx;
+	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
 
 	if (ctx)
 		kwatch_hwbp_put(ctx->wp);
@@ -23,26 +27,26 @@ void kwatch_ctx_release(void)
 	ctx->wp = NULL;
 	ctx->sp = 0;
 	ctx->depth = 0;
-	ctx->generation = READ_ONCE(probe_generation);
+	ctx->generation = READ_ONCE(kwatch_probe_ctx.generation);
 }
 
-static bool kwatch_check_ctx(bool entry)
+static bool kwatch_tsk_ctx_check(bool entry)
 {
-	struct kwatch_ctx *ctx = &current->kwatch_ctx;
-	u16 cur_enable = READ_ONCE(probe_enable);
-	u16 cur_generation = READ_ONCE(probe_generation);
-	u16 cur_depth, target_depth = kwatch_get_config()->depth;
+	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
+	u16 cur_enable = READ_ONCE(kwatch_probe_ctx.enable);
+	u16 cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
+	u16 cur_depth, target_depth = kwatch_probe_ctx.cfg->depth;
 
 	if (!cur_enable) {
-		kwatch_ctx_release();
+		kwatch_tsk_ctx_reset();
 		return false;
 	}
 
 	if (ctx->generation != cur_generation)
-		kwatch_ctx_release();
+		kwatch_tsk_ctx_reset();
 
 	if (!entry && !ctx->depth) {
-		kwatch_ctx_release();
+		kwatch_tsk_ctx_reset();
 		return false;
 	}
 
@@ -60,29 +64,26 @@ static bool kwatch_check_ctx(bool entry)
 static void kwatch_fentry_handler(struct kprobe *p, struct pt_regs *regs,
 				  unsigned long flags)
 {
-	struct kwatch_config *cfg = kwatch_get_config();
-	struct kwatch_ctx *ctx = &current->kwatch_ctx;
+	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
+	enum kwatch_access_type type = kwatch_probe_ctx.cfg->access_type;
 	ulong stack_pointer;
 	ulong watch_addr;
 	u16 watch_len;
-	enum kwatch_access_type type;
 
 	stack_pointer = kernel_stack_pointer(regs);
 
 	if (ctx->wp && ctx->sp == stack_pointer)
 		return;
 
-	if (!kwatch_check_ctx(true))
+	if (!kwatch_tsk_ctx_check(true))
 		return;
 
 	if (kwatch_hwbp_get(&ctx->wp))
 		return;
 
-	if (cfg->mode_ops->resolve(regs,
-				   cfg->mode_config,
-				   &watch_addr,
-				   &watch_len,
-				   &type)) {
+	if (kwatch_mode_addr_len_resolve(regs,
+					 &watch_addr,
+					 &watch_len)) {
 		kwatch_hwbp_put(ctx->wp);
 		return;
 	}
@@ -94,46 +95,53 @@ static void kwatch_fentry_handler(struct kprobe *p, struct pt_regs *regs,
 static int kwatch_fexit_handler(struct kretprobe_instance *ri,
 				struct pt_regs *regs)
 {
-	if (!kwatch_check_ctx(false))
+	if (!kwatch_tsk_ctx_check(false))
 		return 0;
 
-	kwatch_ctx_release();
+	kwatch_tsk_ctx_reset();
 	return 0;
 }
 
-int kwatch_probe_start(void)
+int kwatch_probe_start(struct kwatch_config *cfg)
 {
-	const struct kwatch_config *cfg = kwatch_get_config();
 	int ret;
 
-	memset(&kwatch_entry_probe, 0, sizeof(kwatch_entry_probe));
-	kwatch_entry_probe.symbol_name = cfg->func_name;
-	kwatch_entry_probe.offset = cfg->func_offset;
-	kwatch_entry_probe.post_handler = kwatch_fentry_handler;
+	if (kwatch_probe_ctx.enable)
+		return -EBUSY;
 
-	ret = register_kprobe(&kwatch_entry_probe);
-	if (ret)
-		return ret;
+	u16 cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
 
-	memset(&kwatch_exit_probe, 0, sizeof(kwatch_exit_probe));
-	kwatch_exit_probe.handler = kwatch_fexit_handler;
-	kwatch_exit_probe.kp.symbol_name = kwatch_get_config()->func_name;
+	memset(&kwatch_probe_ctx, 0, sizeof(kwatch_probe_ctx));
 
-	ret = register_kretprobe(&kwatch_exit_probe);
+	kwatch_probe_ctx.rp.handler = kwatch_fexit_handler;
+	kwatch_probe_ctx.rp.kp.symbol_name = cfg->func_name;
+
+	ret = register_kretprobe(&kwatch_probe_ctx.rp);
 	if (ret < 0) {
-		unregister_kprobe(&kwatch_entry_probe);
+		unregister_kprobe(&kwatch_probe_ctx.kp);
 		return ret;
 	}
 
-	WRITE_ONCE(probe_generation, READ_ONCE(probe_generation) + 1);
-	WRITE_ONCE(probe_enable, true);
+	kwatch_probe_ctx.kp.symbol_name = cfg->func_name;
+	kwatch_probe_ctx.kp.offset = cfg->func_offset;
+	kwatch_probe_ctx.kp.post_handler = kwatch_fentry_handler;
+
+	ret = register_kprobe(&kwatch_probe_ctx.kp);
+	if (ret)
+		return ret;
+
+	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
+	WRITE_ONCE(kwatch_probe_ctx.enable, true);
 	return 0;
 }
 
 void kwatch_probe_stop(void)
 {
-	WRITE_ONCE(probe_enable, false);
-	WRITE_ONCE(probe_generation, READ_ONCE(probe_generation) + 1);
-	unregister_kretprobe(&kwatch_exit_probe);
-	unregister_kprobe(&kwatch_entry_probe);
+	u16 cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
+
+	unregister_kprobe(&kwatch_probe_ctx.kp);
+	unregister_kretprobe(&kwatch_probe_ctx.rp);
+	synchronize_rcu();
+	WRITE_ONCE(kwatch_probe_ctx.enable, false);
+	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
 }

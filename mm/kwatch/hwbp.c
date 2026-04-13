@@ -175,9 +175,8 @@ int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
 	return 0;
 }
 
-int kwatch_hwbp_prealloc(void)
+int kwatch_hwbp_prealloc(u16 max_watch)
 {
-	int max_watch = kwatch_get_config()->max_watch;
 	struct kwatch_watchpoint *wp;
 	int success = 0, cpu;
 

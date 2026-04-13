@@ -1000,7 +1000,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 #endif
 
 #ifdef CONFIG_KWATCH
-	memset(&tsk->kwatch_ctx, 0, sizeof(tsk->kwatch_ctx));
+	memset(&tsk->kwatch_tsk_ctx, 0, sizeof(tsk->kwatch_tsk_ctx));
 #endif
 
 #ifdef CONFIG_SCHED_MM_CID

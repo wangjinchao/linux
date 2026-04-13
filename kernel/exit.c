@@ -132,7 +132,7 @@ struct release_task_post {
 };
 
 #ifdef CONFIG_KWATCH
-extern void kwatch_ctx_release(void);
+extern void kwatch_tsk_ctx_reset(void);
 #endif
 
 static void __unhash_process(struct release_task_post *post, struct task_struct *p,
@@ -997,7 +997,7 @@ void __noreturn do_exit(long code)
 #endif
 
 #ifdef CONFIG_KWATCH
-	kwatch_ctx_release();
+	kwatch_tsk_ctx_reset();
 #endif
 
 	/*
