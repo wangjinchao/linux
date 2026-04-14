@@ -52,14 +52,18 @@ static int kwatch_config_parse_kv(struct kwatch_config *cfg, const char *key,
 {
 	int ret = 0;
 
-	if (!strcmp(key, "func_name"))
-		strscpy(kwatch_config.func_name, val);
-	else if (!strcmp(key, "func_offset"))
-		ret = kstrtou16(val, 0, &kwatch_config.func_offset);
-	else if (!strcmp(key, "mode"))
+	if (!strcmp(key, "func_name")) {
+		ret = strscpy(cfg->func_name, val, sizeof(cfg->func_name));
+		if (ret < 0)
+			return ret;
+		ret = 0;
+	} else if (!strcmp(key, "func_offset")) {
+		ret = kstrtou16(val, 0, &cfg->func_offset);
+	} else if (!strcmp(key, "mode")) {
 		ret = kwatch_mode_init(val);
-	else
+	} else {
 		ret = kwatch_mode_config_parse(key, val);
+	}
 
 	return ret;
 }
@@ -69,12 +73,8 @@ static int kwatch_config_parse(char *buf, struct kwatch_config *cfg)
 	char *token, *key, *val;
 	int ret = 0;
 
-	/* * Boundary Safety: Reset global config state.
-	 * kwatch_stop_watching() halts execution, but we must clear old
-	 * parameters and free old plugin memory before accepting new ones.
-	 */
 	memset(cfg, 0, sizeof(*cfg));
-	/* Tokenize and route */
+
 	while ((token = strsep(&buf, " \t\n")) != NULL) {
 		if (!*token)
 			continue;
@@ -92,14 +92,13 @@ static int kwatch_config_parse(char *buf, struct kwatch_config *cfg)
 			return ret;
 	}
 
-	/* Two-Phase Commit: Validation Phase */
-	if (strlen(kwatch_config.func_name)) {
-		pr_err("KWatch: Missing required target function (fn=)\n");
+	if (strlen(cfg->func_name)) {
+		pr_err("Missing required parameter (func_name=)\n");
 		return -EINVAL;
 	}
 
 	if (kwatch_mode_config_validate()) {
-		pr_err("KWatch: Plugin validation failed: %d\n", ret);
+		pr_err("Plugin validation failed: %d\n", ret);
 		return ret;
 	}
 
@@ -203,7 +202,6 @@ static const struct file_operations kwatch_fops = {
 	.release = kwatch_dbgfs_release,
 	.read = kwatch_dbgfs_read,
 	.write = kwatch_dbgfs_write,
-	.llseek = default_llseek,
 };
 
 static int __init kwatch_init(void)
