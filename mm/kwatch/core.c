@@ -21,10 +21,6 @@ static int kwatch_start_watching(void)
 {
 	int ret;
 
-	/*
-	 * Watch init will preallocate the HWBP,
-	 * so it must happen before stack init
-	 */
 	ret = kwatch_hwbp_prealloc(kwatch_config.max_watch);
 	if (ret) {
 		pr_err("kwatch_hwbp_prealloc ret: %d\n", ret);
@@ -126,67 +122,79 @@ static int kwatch_dbgfs_release(struct inode *inode, struct file *file)
 static ssize_t kwatch_dbgfs_read(struct file *file, char __user *user_buf,
 				 size_t count, loff_t *ppos)
 {
-	char out_buf[512];
+	char *out_buf;
 	size_t len = 0;
+	ssize_t ret;
+
+	out_buf = kzalloc(MAX_CONFIG_STR_LEN, GFP_KERNEL);
+	if (!out_buf)
+		return -ENOMEM;
 
 	if (watching_active) {
-		/* Print Global Plane Parameters */
-		len += snprintf(out_buf + len, sizeof(out_buf) - len,
-				"func_name=%s\n"
-				"func_offset=%u\n"
-				"depth=%u\n"
-				"max_watch=%u\n"
-				"access_type=%d\n",
-				kwatch_config.func_name,
-				kwatch_config.func_offset,
-				kwatch_config.depth,
-				kwatch_config.max_watch,
-				kwatch_config.access_type);
+		len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len,
+				 "func_name=%s\n"
+				 "func_offset=%u\n"
+				 "depth=%u\n"
+				 "max_watch=%u\n"
+				 "access_type=%d\n",
+				 kwatch_config.func_name,
+				 kwatch_config.func_offset, kwatch_config.depth,
+				 kwatch_config.max_watch,
+				 kwatch_config.access_type);
 
-		kwatch_mode_config_show(out_buf + len, sizeof(out_buf) - len);
+		len += kwatch_mode_config_show(out_buf + len,
+					       MAX_CONFIG_STR_LEN - len);
 	} else {
-		len = snprintf(out_buf, sizeof(out_buf), "not watching\n");
+		len = scnprintf(out_buf, MAX_CONFIG_STR_LEN, "not watching\n");
 	}
 
-	return simple_read_from_buffer(user_buf, count, ppos, out_buf, len);
+	ret = simple_read_from_buffer(user_buf, count, ppos, out_buf, len);
+
+	kfree(out_buf);
+	return ret;
 }
 
 static ssize_t kwatch_dbgfs_write(struct file *file, const char __user *buffer,
 				  size_t count, loff_t *ppos)
 {
-	char input[MAX_CONFIG_STR_LEN];
+	char *input_alloc;
+	char *parse_str;
 	int ret;
 
-	if (count == 0 || count >= sizeof(input))
+	if (count == 0 || count >= MAX_CONFIG_STR_LEN)
 		return -EINVAL;
 
-	if (copy_from_user(input, buffer, count))
-		return -EFAULT;
+	input_alloc = memdup_user_nul(buffer, count);
+	if (IS_ERR(input_alloc))
+		return PTR_ERR(input_alloc);
 
 	if (watching_active)
 		kwatch_stop_watching();
 
-	input[count] = '\0';
-	strim(input);
+	parse_str = strim(input_alloc);
 
-	if (!strlen(input)) {
-		pr_info("config cleared\n");
-		return count;
+	if (!strlen(parse_str)) {
+		ret = EINVAL;
+		goto out;
 	}
 
-	ret = kwatch_config_parse(input, &kwatch_config);
+	ret = kwatch_config_parse(parse_str, &kwatch_config);
 	if (ret) {
 		pr_err("Failed to parse config %d\n", ret);
-		return ret;
+		goto out;
 	}
 
 	ret = kwatch_start_watching();
 	if (ret) {
 		pr_err("Failed to start watching with %d\n", ret);
-		return ret;
+		goto out;
 	}
 
-	return count;
+	ret = count;
+
+out:
+	kfree(input_alloc);
+	return ret;
 }
 
 static const struct file_operations kwatch_fops = {
