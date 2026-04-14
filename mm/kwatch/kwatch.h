@@ -47,5 +47,6 @@ int kwatch_probe_start(struct kwatch_config *cfg);
 void kwatch_probe_stop(void);
 void kwatch_tsk_ctx_reset(void);
 bool kwatch_is_handler(struct perf_event *event);
+bool kwatch_probe_in_trampoline(unsigned long ip);
 
 #endif /* _MM_KWATCH_H */

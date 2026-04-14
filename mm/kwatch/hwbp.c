@@ -16,40 +16,18 @@ static LLIST_HEAD(kwatch_free_wp_list);
 static LIST_HEAD(kwatch_all_wp_list);
 static DEFINE_MUTEX(kwatch_all_wp_mutex);
 static ulong kwatch_dummy_holder;
-
-#define TRAMPOLINE_NAME "arch_rethook_trampoline"
-#define TRAMPOLINE_DEPTH 16
-static unsigned long tramp_start, tramp_end;
-
-static void kwatch_resolve_trampoline(void)
-{
-	unsigned long sz, off;
-
-	if (likely(tramp_start && tramp_end))
-		return;
-
-	tramp_start = kallsyms_lookup_name(TRAMPOLINE_NAME);
-	if (tramp_start && kallsyms_lookup_size_offset(tramp_start, &sz, &off))
-		tramp_end = tramp_start + sz;
-}
-
-static bool kwatch_watch_in_trampoline(unsigned long ip)
-{
-	if (tramp_start && tramp_end && ip >= tramp_start && ip < tramp_end)
-		return true;
-	return false;
-}
+#define TRAMPOLINE_CHECK_DEPTH 16
 
 static void kwatch_hwbp_handler(struct perf_event *bp,
 				struct perf_sample_data *data,
 				struct pt_regs *regs)
 {
-	unsigned long entries[TRAMPOLINE_DEPTH];
+	unsigned long entries[TRAMPOLINE_CHECK_DEPTH];
 	int i, nr = 0;
 
-	nr = stack_trace_save_regs(regs, entries, TRAMPOLINE_DEPTH, 0);
+	nr = stack_trace_save_regs(regs, entries, TRAMPOLINE_CHECK_DEPTH, 0);
 	for (i = 0; i < nr; i++) {
-		if (kwatch_watch_in_trampoline(entries[i]))
+		if (kwatch_probe_in_trampoline(entries[i]))
 			return;
 	}
 
@@ -63,7 +41,7 @@ bool kwatch_is_handler(struct perf_event *event)
 	return unlikely(event->overflow_handler == kwatch_hwbp_handler);
 }
 
-static void kwatch_hwbp_on_local(void *info)
+static void kwatch_hwbp_arm_local(void *info)
 {
 	struct kwatch_watchpoint *wp = info;
 	struct perf_event *bp;
@@ -85,7 +63,7 @@ static void kwatch_hwbp_on_local(void *info)
 	}
 }
 
-static int kwatch_cpu_online(unsigned int cpu)
+static int kwatch_hwbp_cpu_online(unsigned int cpu)
 {
 	struct perf_event_attr attr;
 	struct kwatch_watchpoint *wp;
@@ -103,13 +81,13 @@ static int kwatch_cpu_online(unsigned int cpu)
 			continue;
 		}
 		per_cpu(*wp->event, cpu) = bp;
-		INIT_CSD(per_cpu_ptr(wp->csd, cpu), kwatch_hwbp_on_local, wp);
+		INIT_CSD(per_cpu_ptr(wp->csd, cpu), kwatch_hwbp_arm_local, wp);
 	}
 	mutex_unlock(&kwatch_all_wp_mutex);
 	return 0;
 }
 
-static int kwatch_cpu_offline(unsigned int cpu)
+static int kwatch_hwbp_cpu_offline(unsigned int cpu)
 {
 	struct kwatch_watchpoint *wp;
 	struct perf_event *bp;
@@ -165,7 +143,7 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, ulong addr, u16 len,
 		smp_call_function_single_async(cpu, csd);
 	}
 
-	kwatch_hwbp_on_local(wp);
+	kwatch_hwbp_arm_local(wp);
 }
 
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
@@ -180,7 +158,6 @@ int kwatch_hwbp_prealloc(u16 max_watch)
 	struct kwatch_watchpoint *wp;
 	int success = 0, cpu;
 
-	kwatch_resolve_trampoline();
 	init_llist_head(&kwatch_free_wp_list);
 
 	while (!max_watch || success < max_watch) {
@@ -196,7 +173,7 @@ int kwatch_hwbp_prealloc(u16 max_watch)
 
 		for_each_possible_cpu(cpu)
 			INIT_CSD(per_cpu_ptr(wp->csd, cpu),
-				 kwatch_hwbp_on_local, wp);
+				 kwatch_hwbp_arm_local, wp);
 
 		hw_breakpoint_init(&wp->attr);
 		wp->attr.bp_addr = (ulong)&kwatch_dummy_holder;
@@ -221,8 +198,8 @@ int kwatch_hwbp_prealloc(u16 max_watch)
 
 	if (success > 0)
 		cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN, "kwatch:online",
-					  kwatch_cpu_online,
-					  kwatch_cpu_offline);
+					  kwatch_hwbp_cpu_online,
+					  kwatch_hwbp_cpu_offline);
 
 	return success > 0 ? 0 : -EBUSY;
 }

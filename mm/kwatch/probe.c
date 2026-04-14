@@ -6,6 +6,28 @@
 #include "kwatch.h"
 #include "mode/mode.h"
 
+#define TRAMPOLINE_NAME "arch_rethook_trampoline"
+static unsigned long tramp_start, tramp_end;
+
+static void kwatch_probe_resolve_trampoline(void)
+{
+	unsigned long sz, off;
+
+	if (likely(tramp_start && tramp_end))
+		return;
+
+	tramp_start = kallsyms_lookup_name(TRAMPOLINE_NAME);
+	if (tramp_start && kallsyms_lookup_size_offset(tramp_start, &sz, &off))
+		tramp_end = tramp_start + sz;
+}
+
+bool kwatch_probe_in_trampoline(unsigned long ip)
+{
+	if (tramp_start && tramp_end && ip >= tramp_start && ip < tramp_end)
+		return true;
+	return false;
+}
+
 struct kwatch_probe_ctx {
 	struct kprobe kp;
 	struct kretprobe rp;
@@ -81,9 +103,7 @@ static void kwatch_fentry_handler(struct kprobe *p, struct pt_regs *regs,
 	if (kwatch_hwbp_get(&ctx->wp))
 		return;
 
-	if (kwatch_mode_addr_len_resolve(regs,
-					 &watch_addr,
-					 &watch_len)) {
+	if (kwatch_mode_addr_len_resolve(regs, &watch_addr, &watch_len)) {
 		kwatch_hwbp_put(ctx->wp);
 		return;
 	}
@@ -108,6 +128,8 @@ int kwatch_probe_start(struct kwatch_config *cfg)
 
 	if (kwatch_probe_ctx.enable)
 		return -EBUSY;
+
+	kwatch_probe_resolve_trampoline();
 
 	u16 cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
 
