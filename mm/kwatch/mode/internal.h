@@ -1,5 +1,5 @@
-#ifndef _KWATCH_MODE_H_
-#define _KWATCH_MODE_H_
+#ifndef _KWATCH_MODE_INTERNAL_H_
+#define _KWATCH_MODE_INTERNAL_H_
 #include <linux/ptrace.h>
 
 enum kwatch_mode_type {

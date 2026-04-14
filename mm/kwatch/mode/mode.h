@@ -1,5 +1,5 @@
-#ifndef _KWATCH_TARGET_H
-#define _KWATCH_TARGET_H
+#ifndef _KWATCH_MODE_MODE_H
+#define _KWATCH_MODE_MODE_H
 
 #include <linux/ptrace.h>
 
