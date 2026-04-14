@@ -21,7 +21,7 @@ void kwatch_tsk_ctx_reset(void)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
 
-	if (ctx)
+	if (ctx->wp)
 		kwatch_hwbp_put(ctx->wp);
 
 	ctx->wp = NULL;

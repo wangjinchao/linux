@@ -15,7 +15,7 @@ struct kwatch_watchpoint {
 	struct perf_event *__percpu *event;
 	call_single_data_t __percpu *csd;
 	struct perf_event_attr attr;
-	struct llist_node node; // for atomic watch_on and off
+	struct llist_node node; // for atomic get/put
 	struct list_head list; // for cpu online and offline
 
 	/* Async Reclaim State */
@@ -46,7 +46,6 @@ int kwatch_hwbp_put(struct kwatch_watchpoint *wp);
 int kwatch_probe_start(struct kwatch_config *cfg);
 void kwatch_probe_stop(void);
 void kwatch_tsk_ctx_reset(void);
-void kwatch_action_trigger(struct perf_event *bp, struct pt_regs *regs);
 bool kwatch_is_handler(struct perf_event *event);
 
 #endif /* _MM_KWATCH_H */
