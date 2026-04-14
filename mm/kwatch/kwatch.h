@@ -23,8 +23,8 @@ struct kwatch_watchpoint {
 };
 
 enum kwatch_access_type {
-	KWATCH_ACCESS_R,
 	KWATCH_ACCESS_W,
+	KWATCH_ACCESS_R,
 	KWATCH_ACCESS_RW,
 	KWATCH_ACCESS_X,
 };
