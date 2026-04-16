@@ -165,15 +165,16 @@ void kwatch_probe_stop(void)
 {
 	u16 cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
 
-	unregister_kprobe(&kwatch_probe_ctx.kp);
-	unregister_kretprobe(&kwatch_probe_ctx.rp);
-	synchronize_rcu();
-
 	/*
 	 * smp_store_release() ensures the disabled state is visible to fast-path
 	 * readers before we increment the generation counter to flush old contexts.
 	 * Pairs with smp_load_acquire() in kwatch_tsk_ctx_check().
 	 */
 	smp_store_release(&kwatch_probe_ctx.enable, false);
+
+	unregister_kprobe(&kwatch_probe_ctx.kp);
+	unregister_kretprobe(&kwatch_probe_ctx.rp);
+	synchronize_rcu();
+
 	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
 }
