@@ -130,18 +130,18 @@ int kwatch_probe_start(struct kwatch_config *cfg)
 	kwatch_probe_ctx.rp.kp.symbol_name = cfg->func_name;
 
 	ret = register_kretprobe(&kwatch_probe_ctx.rp);
-	if (ret < 0) {
-		unregister_kprobe(&kwatch_probe_ctx.kp);
+	if (ret < 0)
 		return ret;
-	}
 
 	kwatch_probe_ctx.kp.symbol_name = cfg->func_name;
 	kwatch_probe_ctx.kp.offset = cfg->func_offset;
 	kwatch_probe_ctx.kp.post_handler = kwatch_fentry_handler;
 
 	ret = register_kprobe(&kwatch_probe_ctx.kp);
-	if (ret)
+	if (ret) {
+		unregister_kretprobe(&kwatch_probe_ctx.rp);
 		return ret;
+	}
 
 	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
 	WRITE_ONCE(kwatch_probe_ctx.enable, true);
