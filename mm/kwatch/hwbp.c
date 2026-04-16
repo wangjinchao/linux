@@ -104,6 +104,13 @@ static int kwatch_hwbp_cpu_offline(unsigned int cpu)
 	return 0;
 }
 
+static void kwatch_wp_destroy(struct kwatch_watchpoint *wp)
+{
+	unregister_wide_hw_breakpoint(wp->event);
+	free_percpu(wp->csd);
+	kfree(wp);
+}
+
 int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp)
 {
 	struct llist_node *node = llist_del_first(&kwatch_free_wp_list);
@@ -112,6 +119,7 @@ int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp)
 		return -EBUSY;
 
 	*out_wp = llist_entry(node, struct kwatch_watchpoint, node);
+	atomic_inc(&(*out_wp)->refcount);
 	return 0;
 }
 
@@ -161,6 +169,10 @@ int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
 {
 	kwatch_hwbp_arm(wp, (ulong)&kwatch_dummy_holder, sizeof(ulong),
 			KWATCH_ACCESS_W);
+
+	// Drop task ownership. If pool is gone (ref == 0), task frees it.
+	if (atomic_dec_and_test(&wp->refcount))
+		kwatch_wp_destroy(wp);
 	return 0;
 }
 
@@ -200,6 +212,8 @@ int kwatch_hwbp_prealloc(u16 max_watch)
 			break;
 		}
 
+		atomic_set(&wp->refcount, 1);
+
 		llist_add(&wp->node, &kwatch_free_wp_list);
 		mutex_lock(&kwatch_all_wp_mutex);
 		list_add(&wp->list, &kwatch_all_wp_list);
@@ -223,9 +237,13 @@ void kwatch_hwbp_free(void)
 	mutex_lock(&kwatch_all_wp_mutex);
 	list_for_each_entry_safe(wp, tmp, &kwatch_all_wp_list, list) {
 		list_del(&wp->list);
-		unregister_wide_hw_breakpoint(wp->event);
-		free_percpu(wp->csd);
-		kfree(wp);
+
+		/* Drop pool ownership.
+		 * If a flying task holds it, ref drops to 1, and task frees it later.
+		 * If idle, ref drops to 0, and we free it immediately.
+		 */
+		if (atomic_dec_and_test(&wp->refcount))
+			kwatch_wp_destroy(wp);
 	}
 	mutex_unlock(&kwatch_all_wp_mutex);
 }

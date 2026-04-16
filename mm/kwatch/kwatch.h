@@ -20,6 +20,7 @@ struct kwatch_watchpoint {
 
 	/* Async Reclaim State */
 	atomic_t pending_ipis;
+	atomic_t refcount;
 };
 
 enum kwatch_access_type {
