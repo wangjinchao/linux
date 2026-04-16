@@ -46,7 +46,13 @@ void kwatch_tsk_ctx_reset(void)
 static bool kwatch_tsk_ctx_check(bool entry)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
-	u16 cur_enable = READ_ONCE(kwatch_probe_ctx.enable);
+
+	/*
+	 * smp_load_acquire() ensures we only read the updated configuration
+	 * and generation counter after observing that the framework is enabled.
+	 * Pairs with smp_store_release() in kwatch_probe_start() and stop().
+	 */
+	u16 cur_enable = smp_load_acquire(&kwatch_probe_ctx.enable);
 	u16 cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
 	u16 cur_depth, target_depth = kwatch_probe_ctx.cfg->depth;
 
@@ -118,6 +124,7 @@ int kwatch_probe_start(struct kwatch_config *cfg)
 	u16 cur_generation;
 	int ret;
 
+	/* Protected by kwatch_dbgfs_mutex, no need for mb */
 	if (kwatch_probe_ctx.enable)
 		return -EBUSY;
 
@@ -144,7 +151,13 @@ int kwatch_probe_start(struct kwatch_config *cfg)
 	}
 
 	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
-	WRITE_ONCE(kwatch_probe_ctx.enable, true);
+
+	/*
+	 * smp_store_release() ensures that updates to the configuration pointer
+	 * and generation counter are fully visible to other CPUs before enabling.
+	 * Pairs with smp_load_acquire() in kwatch_tsk_ctx_check().
+	 */
+	smp_store_release(&kwatch_probe_ctx.enable, true);
 	return 0;
 }
 
@@ -155,6 +168,12 @@ void kwatch_probe_stop(void)
 	unregister_kprobe(&kwatch_probe_ctx.kp);
 	unregister_kretprobe(&kwatch_probe_ctx.rp);
 	synchronize_rcu();
-	WRITE_ONCE(kwatch_probe_ctx.enable, false);
+
+	/*
+	 * smp_store_release() ensures the disabled state is visible to fast-path
+	 * readers before we increment the generation counter to flush old contexts.
+	 * Pairs with smp_load_acquire() in kwatch_tsk_ctx_check().
+	 */
+	smp_store_release(&kwatch_probe_ctx.enable, false);
 	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
 }
