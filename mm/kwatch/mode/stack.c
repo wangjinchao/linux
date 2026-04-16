@@ -25,8 +25,7 @@ static int stack_config_validate(void)
 {
 	if (kwatch_stack_cfg.watch_len != 1 &&
 	    kwatch_stack_cfg.watch_len != 2 &&
-	    kwatch_stack_cfg.watch_len != 4 &&
-	    kwatch_stack_cfg.watch_len != 8)
+	    kwatch_stack_cfg.watch_len != 4 && kwatch_stack_cfg.watch_len != 8)
 		return -EINVAL;
 
 	if (kwatch_stack_cfg.sp_offset > THREAD_SIZE)
@@ -58,16 +57,26 @@ static int stack_config_show(char *buf, size_t size)
 static int kwatch_stack_resolve(struct pt_regs *regs, ulong *out_addr,
 				u16 *out_len)
 {
+	ulong sp = kernel_stack_pointer(regs);
+	u16 len = kwatch_stack_cfg.watch_len;
 	ulong addr;
-	u16 len;
-	unsigned long stack_start = (unsigned long)current->stack;
-	unsigned long stack_end = stack_start + THREAD_SIZE;
 
-	addr = kernel_stack_pointer(regs) + kwatch_stack_cfg.sp_offset;
-	len = kwatch_stack_cfg.watch_len;
+	if (unlikely(!sp))
+		return -EINVAL;
 
-	if (!addr || addr < stack_start || (addr + len) > stack_end) {
-		pr_err("invalid stack addr:0x%lx len:%u\n", addr, len);
+	addr = sp + kwatch_stack_cfg.sp_offset;
+
+	/*
+	 * Flexible Boundary Check:
+	 * 'sp' represents the active stack pointer (Task, IRQ, or Exception).
+	 * We ensure the calculated address does not drift beyond the absolute
+	 * maximum size of a standard stack frame (THREAD_SIZE).
+	 * This math inherently prevents integer overflow during boundary checks.
+	 */
+	if (addr < sp || (addr - sp) >= THREAD_SIZE ||
+	    len > (THREAD_SIZE - (addr - sp))) {
+		pr_err("invalid stack addr:0x%lx sp:0x%lx len:%u\n", addr, sp,
+		       len);
 		return -ERANGE;
 	}
 
