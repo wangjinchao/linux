@@ -99,7 +99,7 @@ static int kwatch_config_parse(char *buf, struct kwatch_config *cfg)
 
 	if (kwatch_mode_config_validate()) {
 		pr_err("Plugin validation failed: %d\n", ret);
-		return ret;
+		return -EINVAL;
 	}
 
 	return 0;

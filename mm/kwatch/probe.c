@@ -1,30 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/kprobes.h>
 #include <linux/fprobe.h>
+#include <linux/rethook.h>
 #include <linux/sched.h>
 
 #include "kwatch.h"
 #include "mode/mode.h"
 
-#define TRAMPOLINE_NAME "arch_rethook_trampoline"
-static unsigned long tramp_start, tramp_end;
-
-static void kwatch_probe_resolve_trampoline(void)
-{
-	unsigned long sz, off;
-
-	if (likely(tramp_start && tramp_end))
-		return;
-
-	tramp_start = kallsyms_lookup_name(TRAMPOLINE_NAME);
-	if (tramp_start && kallsyms_lookup_size_offset(tramp_start, &sz, &off))
-		tramp_end = tramp_start + sz;
-}
-
 bool kwatch_probe_in_trampoline(unsigned long ip)
 {
-	if (tramp_start && tramp_end && ip >= tramp_start && ip < tramp_end)
+#ifdef CONFIG_RETHOOK
+	if (is_rethook_trampoline(ip))
 		return true;
+#else
+	if (is_kretprobe_trampoline(ip))
+		return true;
+#endif
 	return false;
 }
 
@@ -124,16 +115,16 @@ static int kwatch_fexit_handler(struct kretprobe_instance *ri,
 
 int kwatch_probe_start(struct kwatch_config *cfg)
 {
+	u16 cur_generation;
 	int ret;
 
 	if (kwatch_probe_ctx.enable)
 		return -EBUSY;
 
-	kwatch_probe_resolve_trampoline();
-
-	u16 cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
+	cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
 
 	memset(&kwatch_probe_ctx, 0, sizeof(kwatch_probe_ctx));
+	kwatch_probe_ctx.cfg = cfg;
 
 	kwatch_probe_ctx.rp.handler = kwatch_fexit_handler;
 	kwatch_probe_ctx.rp.kp.symbol_name = cfg->func_name;
