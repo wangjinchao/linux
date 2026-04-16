@@ -61,7 +61,11 @@ static int kwatch_config_parse_kv(struct kwatch_config *cfg, const char *key,
 	} else if (!strcmp(key, "func_offset")) {
 		ret = kstrtou16(val, 0, &cfg->func_offset);
 	} else if (!strcmp(key, "mode")) {
-		ret = kwatch_mode_init(val);
+		/*
+		 * The 'mode' parameter is handled in Phase 1 of the parser.
+		 * Skip it here to maintain compatibility with the KV loop.
+		 */
+		ret = 0;
 	} else {
 		ret = kwatch_mode_config_parse(key, val);
 	}
@@ -72,10 +76,38 @@ static int kwatch_config_parse_kv(struct kwatch_config *cfg, const char *key,
 static int kwatch_config_parse(char *buf, struct kwatch_config *cfg)
 {
 	char *token, *key, *val;
+	char *mode_ptr;
 	int ret = 0;
 
 	memset(cfg, 0, sizeof(*cfg));
 
+	/*
+	 * Phase 1: Pre-scanning for 'mode' initialization.
+	 * * Since plugin-specific parameters (like sp_offset) depend on a
+	 * successfully initialized 'kwatch_mode_ops', we must locate and
+	 * initialize the mode first, regardless of its position in the
+	 * configuration string.
+	 */
+	mode_ptr = strstr(buf, "mode=");
+	if (mode_ptr) {
+		char mode_name[32] = {0};
+		/* * Extract the value after 'mode=' until the first delimiter.
+		 * This peek-ahead does not modify the original buffer.
+		 */
+		if (sscanf(mode_ptr, "mode=%31[^ \t\n]", mode_name) == 1) {
+			ret = kwatch_mode_init(mode_name);
+			if (ret) {
+				pr_err("KWatch: Failed to initialize mode '%s'\n", mode_name);
+				return ret;
+			}
+		}
+	}
+
+	/*
+	 * Phase 2: Destructive KV parsing using strsep.
+	 * * All other parameters are parsed and dispatched to either the
+	 * core config or the previously initialized mode plugin.
+	 */
 	while ((token = strsep(&buf, " \t\n")) != NULL) {
 		if (!*token)
 			continue;
