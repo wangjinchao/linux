@@ -12,6 +12,7 @@
 #include "mode/mode.h"
 
 static atomic_t dbgfs_config_busy = ATOMIC_INIT(0);
+static DEFINE_MUTEX(kwatch_dbgfs_mutex);
 static struct kwatch_config kwatch_config;
 static struct dentry *dbgfs_config;
 static struct dentry *dbgfs_dir;
@@ -167,13 +168,16 @@ static ssize_t kwatch_dbgfs_write(struct file *file, const char __user *buffer,
 	if (IS_ERR(input_alloc))
 		return PTR_ERR(input_alloc);
 
+	/* VFS Boundary Lock: Serialize concurrent configuration writes */
+	mutex_lock(&kwatch_dbgfs_mutex);
+
 	if (watching_active)
 		kwatch_stop_watching();
 
 	parse_str = strim(input_alloc);
 
 	if (!strlen(parse_str)) {
-		ret = EINVAL;
+		ret = -EINVAL; /* Corrected from EINVAL */
 		goto out;
 	}
 
@@ -192,6 +196,7 @@ static ssize_t kwatch_dbgfs_write(struct file *file, const char __user *buffer,
 	ret = count;
 
 out:
+	mutex_unlock(&kwatch_dbgfs_mutex);
 	kfree(input_alloc);
 	return ret;
 }

@@ -142,7 +142,16 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, ulong addr, u16 len,
 		if (cpu == cur_cpu)
 			continue;
 		csd = per_cpu_ptr(wp->csd, cpu);
-		smp_call_function_single_async(cpu, csd);
+
+		/** If the CPU went offline after we counted it but before we
+		 * queued the IPI, the queue fails. We must manually decrement.
+		 */
+		if (is_reclaim && smp_call_function_single_async(cpu, csd)) {
+			if (atomic_dec_and_test(&wp->pending_ipis))
+				llist_add(&wp->node, &kwatch_free_wp_list);
+		} else if (!is_reclaim) {
+			smp_call_function_single_async(cpu, csd);
+		}
 	}
 
 	kwatch_hwbp_arm_local(wp);
