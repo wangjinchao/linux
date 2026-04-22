@@ -1,11 +1,17 @@
 config KWATCH
 	bool "Kernel Watch Framework"
-	depends on HAVE_HW_BREAKPOINT && KPROBES && KRETPROBES && STACKTRACE
+	depends on HAVE_HW_BREAKPOINT
 	depends on HAVE_REINSTALL_HW_BREAKPOINT
+	depends on DEBUG_FS
+	depends on PRINTK
+	select KPROBES
+	select KRETPROBES
+	select STACKTRACE
 	help
-	  A generalized hardware-assisted memory monitor framework.
+	  A generalized hardware-assisted memory monitor utility.
 	  It provides a low-overhead, real-time trigger mechanism to monitor
 	  kernel memory safely in atomic contexts using hardware breakpoints.
+
 	  KWatch is designed to catch silent memory corruptions, stack
 	  overwrites, and complex Heisenbugs by synchronously trapping the
 	  exact instruction causing the illegal access.

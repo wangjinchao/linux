@@ -10,6 +10,7 @@
 #include <linux/types.h>
 
 #define MAX_CONFIG_STR_LEN 512
+#define MAX_DEREF_CHAIN 4
 
 struct kwatch_watchpoint {
 	struct perf_event *__percpu *event;
@@ -29,12 +30,32 @@ enum kwatch_access_type {
 	KWATCH_ACCESS_RW,
 	KWATCH_ACCESS_X,
 };
+
+enum kwatch_base_type {
+	KWATCH_BASE_STACK,
+	KWATCH_BASE_GLOBAL_SYM,
+	KWATCH_BASE_ARG1,
+	KWATCH_BASE_ARG2,
+	KWATCH_BASE_ARG3,
+	KWATCH_BASE_ARG4,
+	KWATCH_BASE_ARG5,
+	KWATCH_BASE_ARG6,
+};
+
 struct kwatch_config {
 	u16 max_watch;
 	char func_name[KSYM_NAME_LEN];
 	u16 func_offset;
 	u16 depth;
 	enum kwatch_access_type access_type;
+	u16 watch_len;
+
+	/* Unified Deref Engine State */
+	enum kwatch_base_type base;
+	char sym_name[KSYM_NAME_LEN];
+	ulong sym_addr;
+	long offsets[MAX_DEREF_CHAIN];
+	u8 offset_count;
 };
 
 int kwatch_hwbp_prealloc(u16 max_watch);
@@ -49,5 +70,8 @@ void kwatch_probe_stop(void);
 void kwatch_tsk_ctx_reset(void);
 bool kwatch_is_handler(struct perf_event *event);
 bool kwatch_probe_in_trampoline(unsigned long ip);
+
+int kwatch_deref_resolve(const struct kwatch_config *cfg, struct pt_regs *regs,
+			 ulong *out_addr, u16 *out_len);
 
 #endif /* _MM_KWATCH_H */

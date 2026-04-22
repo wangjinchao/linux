@@ -5,7 +5,6 @@
 #include <linux/sched.h>
 
 #include "kwatch.h"
-#include "mode/mode.h"
 
 bool kwatch_probe_in_trampoline(unsigned long ip)
 {
@@ -100,7 +99,7 @@ static void kwatch_fentry_handler(struct kprobe *p, struct pt_regs *regs,
 	if (kwatch_hwbp_get(&ctx->wp))
 		return;
 
-	if (kwatch_mode_addr_len_resolve(regs, &watch_addr, &watch_len)) {
+	if (kwatch_deref_resolve(kwatch_probe_ctx.cfg, regs, &watch_addr, &watch_len)) {
 		kwatch_hwbp_put(ctx->wp);
 		return;
 	}

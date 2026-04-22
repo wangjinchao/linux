@@ -6,10 +6,10 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/types.h>
 #include <linux/uaccess.h>
 
 #include "kwatch.h"
-#include "mode/mode.h"
 
 static atomic_t dbgfs_config_busy = ATOMIC_INIT(0);
 static DEFINE_MUTEX(kwatch_dbgfs_mutex);
@@ -43,98 +43,133 @@ static void kwatch_stop_watching(void)
 {
 	kwatch_probe_stop();
 	kwatch_hwbp_free();
-	kwatch_mode_uninit();
 
 	watching_active = false;
 }
 
-static int kwatch_config_parse_kv(struct kwatch_config *cfg, const char *key,
-				  const char *val)
+static int parse_deref_chain(struct kwatch_config *cfg, char *val)
 {
-	int ret = 0;
+	char *p = val;
+	char *base_str = p;
+	char *offset_str = NULL;
+	bool has_arrow = false;
 
-	if (!strcmp(key, "func_name")) {
-		ret = strscpy(cfg->func_name, val, sizeof(cfg->func_name));
-		if (ret < 0)
-			return ret;
-		ret = 0;
-	} else if (!strcmp(key, "func_offset")) {
-		ret = kstrtou16(val, 0, &cfg->func_offset);
-	} else if (!strcmp(key, "mode")) {
-		/*
-		 * The 'mode' parameter is handled in Phase 1 of the parser.
-		 * Skip it here to maintain compatibility with the KV loop.
-		 */
-		ret = 0;
-	} else {
-		ret = kwatch_mode_config_parse(key, val);
+	/* 1. Find the boundary of the base string */
+	while (*p) {
+		if (*p == ':') {
+			*p = '\0';
+			offset_str = p + 1;
+			break;
+		} else if (!strncmp(p, "->", 2)) {
+			*p = '\0';
+			offset_str = p + 2;
+			has_arrow = true;
+			break;
+		}
+		p++;
 	}
 
-	return ret;
+	/* 2. Parse the Base Anchor (Unified Logic) */
+	if (!strcmp(base_str, "stack")) {
+		cfg->base = KWATCH_BASE_STACK;
+	} else if (!strncmp(base_str, "arg", 3) && strlen(base_str) == 4) {
+		int arg_num;
+
+		if (kstrtoint(base_str + 3, 10, &arg_num) || arg_num < 1 ||
+		    arg_num > 6)
+			return -EINVAL;
+		cfg->base = KWATCH_BASE_ARG1 + (arg_num - 1);
+	} else {
+		/* Fallback: Treat as a global symbol */
+		cfg->base = KWATCH_BASE_GLOBAL_SYM;
+
+		strscpy(cfg->sym_name, base_str, sizeof(cfg->sym_name));
+
+		cfg->sym_addr = kallsyms_lookup_name(base_str);
+		if (!cfg->sym_addr) {
+			pr_err("KWatch: Base anchor '%s' is not stack, argN, or a valid symbol\n",
+			       base_str);
+			return -EINVAL;
+		}
+	}
+
+	/* 3. Parse the bound :offset (handling implicit 0) */
+	if (has_arrow) {
+		/* Syntax: base->... (implicitly includes :0) */
+		cfg->offsets[cfg->offset_count++] = 0;
+		p = offset_str;
+	} else if (offset_str) {
+		/* Syntax: base:offset... */
+		p = offset_str;
+		char *next_arrow = strstr(p, "->");
+
+		if (next_arrow)
+			*next_arrow = '\0';
+
+		if (*p == '\0') {
+			cfg->offsets[cfg->offset_count++] = 0;
+		} else if (kstrtol(p, 0, &cfg->offsets[cfg->offset_count++])) {
+			return -EINVAL;
+		}
+
+		p = next_arrow ? next_arrow + 2 : NULL;
+	} else {
+		/* Syntax: base (no offsets, no dereferences) */
+		cfg->offsets[cfg->offset_count++] = 0;
+		return 0;
+	}
+
+	/* 4. Parse all subsequent ->offset dereferences */
+	while (p) {
+		char *next_arrow = strstr(p, "->");
+
+		if (cfg->offset_count >= MAX_DEREF_CHAIN)
+			return -E2BIG;
+
+		if (next_arrow)
+			*next_arrow = '\0';
+
+		if (*p == '\0') {
+			cfg->offsets[cfg->offset_count++] = 0;
+		} else if (kstrtol(p, 0, &cfg->offsets[cfg->offset_count++])) {
+			return -EINVAL;
+		}
+
+		p = next_arrow ? next_arrow + 2 : NULL;
+	}
+
+	return 0;
 }
 
 static int kwatch_config_parse(char *buf, struct kwatch_config *cfg)
 {
 	char *token, *key, *val;
-	char *mode_ptr;
 	int ret = 0;
 
 	memset(cfg, 0, sizeof(*cfg));
 
-	/*
-	 * Phase 1: Pre-scanning for 'mode' initialization.
-	 * * Since plugin-specific parameters (like sp_offset) depend on a
-	 * successfully initialized 'kwatch_mode_ops', we must locate and
-	 * initialize the mode first, regardless of its position in the
-	 * configuration string.
-	 */
-	mode_ptr = strstr(buf, "mode=");
-	if (mode_ptr) {
-		char mode_name[32] = {0};
-		/* * Extract the value after 'mode=' until the first delimiter.
-		 * This peek-ahead does not modify the original buffer.
-		 */
-		if (sscanf(mode_ptr, "mode=%31[^ \t\n]", mode_name) == 1) {
-			ret = kwatch_mode_init(mode_name);
-			if (ret) {
-				pr_err("KWatch: Failed to initialize mode '%s'\n", mode_name);
-				return ret;
-			}
-		}
-	}
-
-	/*
-	 * Phase 2: Destructive KV parsing using strsep.
-	 * * All other parameters are parsed and dispatched to either the
-	 * core config or the previously initialized mode plugin.
-	 */
 	while ((token = strsep(&buf, " \t\n")) != NULL) {
 		if (!*token)
 			continue;
-
 		key = strsep(&token, "=");
 		val = token;
-
-		if (!key || !val) {
-			pr_err("KWatch: Malformed key=value pair\n");
+		if (!key || !val)
 			return -EINVAL;
-		}
 
-		ret = kwatch_config_parse_kv(cfg, key, val);
+		if (!strcmp(key, "func_name"))
+			strscpy(cfg->func_name, val, sizeof(cfg->func_name));
+		else if (!strcmp(key, "func_offset"))
+			ret = kstrtou16(val, 0, &cfg->func_offset);
+		else if (!strcmp(key, "depth"))
+			ret = kstrtou16(val, 0, &cfg->depth);
+		else if (!strcmp(key, "watch_len"))
+			ret = kstrtou16(val, 0, &cfg->watch_len);
+		else if (!strcmp(key, "target"))
+			ret = parse_deref_chain(cfg, val);
+
 		if (ret)
 			return ret;
 	}
-
-	if (strlen(cfg->func_name)) {
-		pr_err("Missing required parameter (func_name=)\n");
-		return -EINVAL;
-	}
-
-	if (kwatch_mode_config_validate()) {
-		pr_err("Plugin validation failed: %d\n", ret);
-		return -EINVAL;
-	}
-
 	return 0;
 }
 
@@ -157,25 +192,62 @@ static ssize_t kwatch_dbgfs_read(struct file *file, char __user *user_buf,
 	char *out_buf;
 	size_t len = 0;
 	ssize_t ret;
+	int i;
+	const char *base_str;
+	static const char *const arg_strs[] = { "arg1", "arg2", "arg3",
+						"arg4", "arg5", "arg6" };
 
 	out_buf = kzalloc(MAX_CONFIG_STR_LEN, GFP_KERNEL);
 	if (!out_buf)
 		return -ENOMEM;
 
 	if (watching_active) {
+		/* 1. Resolve Base Anchor String */
+		if (kwatch_config.base == KWATCH_BASE_STACK)
+			base_str = "stack";
+		else if (kwatch_config.base >= KWATCH_BASE_ARG1 &&
+			 kwatch_config.base <= KWATCH_BASE_ARG6)
+			base_str = arg_strs[kwatch_config.base - KWATCH_BASE_ARG1];
+		else if (kwatch_config.base == KWATCH_BASE_GLOBAL_SYM)
+			base_str = kwatch_config.sym_name; /* NEW: Use saved name */
+		else
+			base_str = "unknown";
+
+		/* 2. Print Core Configuration */
 		len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len,
 				 "func_name=%s\n"
 				 "func_offset=%u\n"
 				 "depth=%u\n"
 				 "max_watch=%u\n"
-				 "access_type=%d\n",
+				 "access_type=%d\n"
+				 "watch_len=%u\n",
 				 kwatch_config.func_name,
 				 kwatch_config.func_offset, kwatch_config.depth,
 				 kwatch_config.max_watch,
-				 kwatch_config.access_type);
+				 kwatch_config.access_type,
+				 kwatch_config.watch_len);
 
-		len += kwatch_mode_config_show(out_buf + len,
-					       MAX_CONFIG_STR_LEN - len);
+		/* NEW: Print the resolved address only if it is a global symbol */
+		if (kwatch_config.base == KWATCH_BASE_GLOBAL_SYM) {
+			len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len,
+					 "sym_addr=0x%px\n",
+					 (void *)kwatch_config.sym_addr);
+		}
+
+		/* 3. Reconstruct the Unified Dereference Chain */
+		len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len,
+				 "target=%s", base_str);
+
+		for (i = 0; i < kwatch_config.offset_count; i++) {
+			if (i == 0)
+				len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len,
+						 ":%ld", kwatch_config.offsets[i]);
+			else
+				len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len,
+						 "->%ld", kwatch_config.offsets[i]);
+		}
+		len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len, "\n");
+
 	} else {
 		len = scnprintf(out_buf, MAX_CONFIG_STR_LEN, "not watching\n");
 	}

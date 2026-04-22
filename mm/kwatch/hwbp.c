@@ -74,7 +74,7 @@ static int kwatch_hwbp_cpu_online(unsigned int cpu)
 	mutex_lock(&kwatch_all_wp_mutex);
 	list_for_each_entry(wp, &kwatch_all_wp_list, list) {
 		attr = wp->attr;
-		attr.bp_addr = (u64)&kwatch_dummy_holder;
+		attr.bp_addr = (ulong)&kwatch_dummy_holder;
 		bp = perf_event_create_kernel_counter(&attr, cpu, NULL,
 						      kwatch_hwbp_handler, wp);
 		if (IS_ERR(bp)) {
