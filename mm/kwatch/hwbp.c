@@ -24,7 +24,9 @@ static void kwatch_hwbp_handler(struct perf_event *bp,
 {
 	unsigned long entries[TRAMPOLINE_CHECK_DEPTH];
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
+	struct kwatch_watchpoint *wp = bp->overflow_handler_context;
 	unsigned long sp = kernel_stack_pointer(regs);
+	unsigned long ip = instruction_pointer(regs);
 	int i, nr = 0;
 
 	/*
@@ -33,7 +35,7 @@ static void kwatch_hwbp_handler(struct perf_event *bp,
 	 * originates from the monitored function itself (or inline logic).
 	 * We ignore these to avoid self-inflicted false positives.
 	 */
-	if (ctx->sp && sp == ctx->sp)
+	if (ctx->sp && sp == ctx->sp && ip >= wp->func_start && ip < wp->func_end)
 		return;
 
 	nr = stack_trace_save_regs(regs, entries, TRAMPOLINE_CHECK_DEPTH, 0);
@@ -199,7 +201,7 @@ int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
 	return 0;
 }
 
-int kwatch_hwbp_prealloc(u16 max_watch)
+int kwatch_hwbp_prealloc(u16 max_watch, ulong func_start, ulong func_end)
 {
 	struct kwatch_watchpoint *wp;
 	int success = 0, cpu;
@@ -241,6 +243,9 @@ int kwatch_hwbp_prealloc(u16 max_watch)
 			kfree(wp);
 			break;
 		}
+
+		wp->func_start = func_start;
+		wp->func_end = func_end;
 
 		atomic_set(&wp->refcount, 1);
 

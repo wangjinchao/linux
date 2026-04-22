@@ -23,6 +23,10 @@ struct kwatch_watchpoint {
 	/* Async disarm State */
 	atomic_t pending_ipis;
 	atomic_t refcount;
+
+	ulong func_start;
+	ulong func_end;
+
 };
 
 enum kwatch_access_type {
@@ -59,7 +63,7 @@ struct kwatch_config {
 	u8 offset_count;
 };
 
-int kwatch_hwbp_prealloc(u16 max_watch);
+int kwatch_hwbp_prealloc(u16 max_watch, ulong func_start, ulong func_end);
 void kwatch_hwbp_free(void);
 int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp);
 void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, ulong addr, u16 len,

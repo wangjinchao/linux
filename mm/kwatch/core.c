@@ -2,6 +2,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/debugfs.h>
+#include <linux/kallsyms.h>
 #include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -20,9 +21,24 @@ static bool watching_active;
 
 static int kwatch_start_watching(void)
 {
+	unsigned long addr, size;
 	int ret;
 
-	ret = kwatch_hwbp_prealloc(kwatch_config.max_watch);
+	/* 1. Resolve the entry point address */
+	addr = kallsyms_lookup_name(kwatch_config.func_name);
+	if (!addr)
+		return -ENOENT;
+
+	/* * 2. Retrieve symbol size.
+	 * Modern kallsyms APIs allow passing NULL for the offset pointer
+	 * if the caller only requires the symbol size.
+	 */
+	if (!kallsyms_lookup_size_offset(addr, &size, NULL))
+		return -ENOENT;
+
+	ret = kwatch_hwbp_prealloc(kwatch_config.max_watch,
+				   addr,
+				   addr + size);
 	if (ret) {
 		pr_err("kwatch_hwbp_prealloc ret: %d\n", ret);
 		return ret;
@@ -207,9 +223,11 @@ static ssize_t kwatch_dbgfs_read(struct file *file, char __user *user_buf,
 			base_str = "stack";
 		else if (kwatch_config.base >= KWATCH_BASE_ARG1 &&
 			 kwatch_config.base <= KWATCH_BASE_ARG6)
-			base_str = arg_strs[kwatch_config.base - KWATCH_BASE_ARG1];
+			base_str =
+				arg_strs[kwatch_config.base - KWATCH_BASE_ARG1];
 		else if (kwatch_config.base == KWATCH_BASE_GLOBAL_SYM)
-			base_str = kwatch_config.sym_name; /* NEW: Use saved name */
+			base_str =
+				kwatch_config.sym_name; /* NEW: Use saved name */
 		else
 			base_str = "unknown";
 
@@ -229,7 +247,8 @@ static ssize_t kwatch_dbgfs_read(struct file *file, char __user *user_buf,
 
 		/* NEW: Print the resolved address only if it is a global symbol */
 		if (kwatch_config.base == KWATCH_BASE_GLOBAL_SYM) {
-			len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len,
+			len += scnprintf(out_buf + len,
+					 MAX_CONFIG_STR_LEN - len,
 					 "sym_addr=0x%px\n",
 					 (void *)kwatch_config.sym_addr);
 		}
@@ -240,11 +259,15 @@ static ssize_t kwatch_dbgfs_read(struct file *file, char __user *user_buf,
 
 		for (i = 0; i < kwatch_config.offset_count; i++) {
 			if (i == 0)
-				len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len,
-						 ":%ld", kwatch_config.offsets[i]);
+				len += scnprintf(out_buf + len,
+						 MAX_CONFIG_STR_LEN - len,
+						 ":%ld",
+						 kwatch_config.offsets[i]);
 			else
-				len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len,
-						 "->%ld", kwatch_config.offsets[i]);
+				len += scnprintf(out_buf + len,
+						 MAX_CONFIG_STR_LEN - len,
+						 "->%ld",
+						 kwatch_config.offsets[i]);
 		}
 		len += scnprintf(out_buf + len, MAX_CONFIG_STR_LEN - len, "\n");
 
