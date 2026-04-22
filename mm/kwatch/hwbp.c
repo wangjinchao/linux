@@ -23,7 +23,18 @@ static void kwatch_hwbp_handler(struct perf_event *bp,
 				struct pt_regs *regs)
 {
 	unsigned long entries[TRAMPOLINE_CHECK_DEPTH];
+	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
+	unsigned long sp = kernel_stack_pointer(regs);
 	int i, nr = 0;
+
+	/*
+	 * SP-based Spatial Filter:
+	 * If regs->sp matches the activation frame (ctx->sp), the access
+	 * originates from the monitored function itself (or inline logic).
+	 * We ignore these to avoid self-inflicted false positives.
+	 */
+	if (ctx->sp && sp == ctx->sp)
+		return;
 
 	nr = stack_trace_save_regs(regs, entries, TRAMPOLINE_CHECK_DEPTH, 0);
 	for (i = 0; i < nr; i++) {
