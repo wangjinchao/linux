@@ -79,42 +79,58 @@ static bool kwatch_tsk_ctx_check(bool entry)
 		return false;
 }
 
-static void kwatch_fentry_handler(struct kprobe *p, struct pt_regs *regs,
-				  unsigned long flags)
+static int kwatch_lifecycle_entry(struct kretprobe_instance *ri,
+				  struct pt_regs *regs)
+{
+	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
+	ulong stack_pointer = kernel_stack_pointer(regs);
+
+	if (ctx->wp && ctx->sp == stack_pointer)
+		return 0;
+
+	if (!kwatch_tsk_ctx_check(true))
+		return 0;
+
+	ctx->sp = stack_pointer;
+	return 0;
+}
+
+static int kwatch_lifecycle_exit(struct kretprobe_instance *ri,
+				 struct pt_regs *regs)
+{
+	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
+
+	if (kwatch_tsk_ctx_check(false)) {
+		if (ctx->wp) {
+			kwatch_hwbp_put(ctx->wp);
+			ctx->wp = NULL;
+		}
+		ctx->sp = 0;
+	}
+
+	if (ctx->depth == 0)
+		kwatch_tsk_ctx_reset();
+
+	return 0;
+}
+
+static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
 	enum kwatch_access_type type = kwatch_probe_ctx.cfg->access_type;
-	ulong stack_pointer;
 	ulong watch_addr;
 	u16 watch_len;
 
-	stack_pointer = kernel_stack_pointer(regs);
-
-	if (ctx->wp && ctx->sp == stack_pointer)
-		return;
-
-	if (!kwatch_tsk_ctx_check(true))
-		return;
-
-	if (kwatch_hwbp_get(&ctx->wp))
-		return;
-
-	if (kwatch_deref_resolve(kwatch_probe_ctx.cfg, regs, &watch_addr, &watch_len)) {
-		kwatch_hwbp_put(ctx->wp);
-		return;
-	}
-
-	kwatch_hwbp_arm(ctx->wp, watch_addr, watch_len, type);
-	ctx->sp = stack_pointer;
-}
-
-static int kwatch_fexit_handler(struct kretprobe_instance *ri,
-				struct pt_regs *regs)
-{
-	if (!kwatch_tsk_ctx_check(false))
+	if (ctx->depth != kwatch_probe_ctx.cfg->depth + 1 || ctx->wp)
 		return 0;
 
-	kwatch_tsk_ctx_reset();
+	if (kwatch_deref_resolve(kwatch_probe_ctx.cfg, regs, &watch_addr, &watch_len))
+		return 0;
+
+	if (kwatch_hwbp_get(&ctx->wp))
+		return 0;
+
+	kwatch_hwbp_arm(ctx->wp, watch_addr, watch_len, type);
 	return 0;
 }
 
@@ -123,7 +139,6 @@ int kwatch_probe_start(struct kwatch_config *cfg)
 	u16 cur_generation;
 	int ret;
 
-	/* Protected by kwatch_dbgfs_mutex, no need for mb */
 	if (kwatch_probe_ctx.enable)
 		return -EBUSY;
 
@@ -132,7 +147,8 @@ int kwatch_probe_start(struct kwatch_config *cfg)
 	memset(&kwatch_probe_ctx, 0, sizeof(kwatch_probe_ctx));
 	kwatch_probe_ctx.cfg = cfg;
 
-	kwatch_probe_ctx.rp.handler = kwatch_fexit_handler;
+	kwatch_probe_ctx.rp.entry_handler = kwatch_lifecycle_entry;
+	kwatch_probe_ctx.rp.handler = kwatch_lifecycle_exit;
 	kwatch_probe_ctx.rp.kp.symbol_name = cfg->func_name;
 
 	ret = register_kretprobe(&kwatch_probe_ctx.rp);
@@ -141,7 +157,7 @@ int kwatch_probe_start(struct kwatch_config *cfg)
 
 	kwatch_probe_ctx.kp.symbol_name = cfg->func_name;
 	kwatch_probe_ctx.kp.offset = cfg->func_offset;
-	kwatch_probe_ctx.kp.post_handler = kwatch_fentry_handler;
+	kwatch_probe_ctx.kp.pre_handler = kwatch_activate_handler;
 
 	ret = register_kprobe(&kwatch_probe_ctx.kp);
 	if (ret) {
