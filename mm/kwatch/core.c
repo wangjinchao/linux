@@ -57,10 +57,10 @@ static int kwatch_start_watching(void)
 
 static void kwatch_stop_watching(void)
 {
-	kwatch_probe_stop();
-	kwatch_hwbp_free();
-
 	watching_active = false;
+	kwatch_probe_stop();
+	synchronize_rcu();
+	kwatch_hwbp_free();
 }
 
 static int parse_deref_chain(struct kwatch_config *cfg, char *val)

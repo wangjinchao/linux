@@ -267,7 +267,9 @@ void kwatch_hwbp_free(void)
 {
 	struct kwatch_watchpoint *wp, *tmp;
 
+	llist_del_all(&kwatch_free_wp_list);
 	cpuhp_remove_state_nocalls(CPUHP_AP_ONLINE_DYN);
+
 	mutex_lock(&kwatch_all_wp_mutex);
 	list_for_each_entry_safe(wp, tmp, &kwatch_all_wp_list, list) {
 		list_del(&wp->list);
