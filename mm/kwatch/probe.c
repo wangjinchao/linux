@@ -83,7 +83,7 @@ static int kwatch_lifecycle_entry(struct kretprobe_instance *ri,
 				  struct pt_regs *regs)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
-	ulong stack_pointer = kernel_stack_pointer(regs);
+	unsigned long stack_pointer = kernel_stack_pointer(regs);
 
 	if (ctx->wp && ctx->sp == stack_pointer)
 		return 0;
@@ -118,7 +118,7 @@ static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
 	enum kwatch_access_type type = kwatch_probe_ctx.cfg->access_type;
-	ulong watch_addr;
+	unsigned long watch_addr;
 	u16 watch_len;
 
 	if (ctx->depth != kwatch_probe_ctx.cfg->depth + 1 || ctx->wp)

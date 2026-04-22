@@ -24,8 +24,8 @@ struct kwatch_watchpoint {
 	atomic_t pending_ipis;
 	atomic_t refcount;
 
-	ulong func_start;
-	ulong func_end;
+	unsigned long func_start;
+	unsigned long func_end;
 
 };
 
@@ -58,15 +58,15 @@ struct kwatch_config {
 	/* Unified Deref Engine State */
 	enum kwatch_base_type base;
 	char sym_name[KSYM_NAME_LEN];
-	ulong sym_addr;
+	unsigned long sym_addr;
 	long offsets[MAX_DEREF_CHAIN];
 	u8 offset_count;
 };
 
-int kwatch_hwbp_prealloc(u16 max_watch, ulong func_start, ulong func_end);
+int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start, unsigned long func_end);
 void kwatch_hwbp_free(void);
 int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp);
-void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, ulong addr, u16 len,
+void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
 		     enum kwatch_access_type type);
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp);
 
@@ -77,6 +77,6 @@ bool kwatch_is_handler(struct perf_event *event);
 bool kwatch_probe_in_trampoline(unsigned long ip);
 
 int kwatch_deref_resolve(const struct kwatch_config *cfg, struct pt_regs *regs,
-			 ulong *out_addr, u16 *out_len);
+			 unsigned long *out_addr, u16 *out_len);
 
 #endif /* _MM_KWATCH_H */

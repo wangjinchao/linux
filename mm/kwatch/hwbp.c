@@ -15,7 +15,7 @@
 static LLIST_HEAD(kwatch_free_wp_list);
 static LIST_HEAD(kwatch_all_wp_list);
 static DEFINE_MUTEX(kwatch_all_wp_mutex);
-static ulong kwatch_dummy_holder;
+static unsigned long kwatch_dummy_holder;
 #define TRAMPOLINE_CHECK_DEPTH 16
 
 static void kwatch_hwbp_handler(struct perf_event *bp,
@@ -58,7 +58,7 @@ static void kwatch_hwbp_arm_local(void *info)
 {
 	struct kwatch_watchpoint *wp = info;
 	struct perf_event *bp;
-	ulong flags;
+	unsigned long flags;
 	int cpu;
 
 	local_irq_save(flags);
@@ -91,7 +91,7 @@ static int kwatch_hwbp_cpu_online(unsigned int cpu)
 	mutex_lock(&kwatch_all_wp_mutex);
 	list_for_each_entry(wp, &kwatch_all_wp_list, list) {
 		attr = wp->attr;
-		attr.bp_addr = (ulong)&kwatch_dummy_holder;
+		attr.bp_addr = (unsigned long)&kwatch_dummy_holder;
 		bp = perf_event_create_kernel_counter(&attr, cpu, NULL,
 						      kwatch_hwbp_handler, wp);
 		if (IS_ERR(bp)) {
@@ -144,13 +144,13 @@ int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp)
 	return 0;
 }
 
-void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, ulong addr, u16 len,
+void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
 		     enum kwatch_access_type type)
 {
 	int cur_cpu = raw_smp_processor_id();
 	call_single_data_t *csd;
 	int cpu, target_count = 0;
-	bool is_disarm = (addr == (ulong)&kwatch_dummy_holder);
+	bool is_disarm = (addr == (unsigned long)&kwatch_dummy_holder);
 
 	wp->attr.bp_addr = addr;
 	wp->attr.bp_len = len;
@@ -192,7 +192,7 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, ulong addr, u16 len,
 
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
 {
-	kwatch_hwbp_arm(wp, (ulong)&kwatch_dummy_holder, sizeof(ulong),
+	kwatch_hwbp_arm(wp, (unsigned long)&kwatch_dummy_holder, sizeof(unsigned long),
 			KWATCH_ACCESS_W);
 
 	// Drop task ownership. If pool is gone (ref == 0), task frees it.
@@ -201,7 +201,7 @@ int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
 	return 0;
 }
 
-int kwatch_hwbp_prealloc(u16 max_watch, ulong func_start, ulong func_end)
+int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start, unsigned long func_end)
 {
 	struct kwatch_watchpoint *wp;
 	int success = 0, cpu;
@@ -230,8 +230,8 @@ int kwatch_hwbp_prealloc(u16 max_watch, ulong func_start, ulong func_end)
 		}
 
 		hw_breakpoint_init(&wp->attr);
-		wp->attr.bp_addr = (ulong)&kwatch_dummy_holder;
-		wp->attr.bp_len = sizeof(ulong);
+		wp->attr.bp_addr = (unsigned long)&kwatch_dummy_holder;
+		wp->attr.bp_len = sizeof(unsigned long);
 		wp->attr.bp_type = HW_BREAKPOINT_X;
 
 		wp->event = register_wide_hw_breakpoint(&wp->attr,

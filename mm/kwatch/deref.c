@@ -8,9 +8,9 @@
 #include "kwatch.h"
 
 int kwatch_deref_resolve(const struct kwatch_config *cfg, struct pt_regs *regs,
-			 ulong *out_addr, u16 *out_len)
+			 unsigned long *out_addr, u16 *out_len)
 {
-	ulong addr = 0;
+	unsigned long addr = 0;
 	int i;
 
 	/* 1. Resolve the Base Anchor */
@@ -42,10 +42,10 @@ int kwatch_deref_resolve(const struct kwatch_config *cfg, struct pt_regs *regs,
 		addr += cfg->offsets[i];
 
 		if (i < cfg->offset_count - 1) {
-			ulong next_addr;
+			unsigned long next_addr;
 
 			/* Dynamically read the pointer contents at runtime */
-			if (get_kernel_nofault(next_addr, (ulong *)addr))
+			if (get_kernel_nofault(next_addr, (unsigned long *)addr))
 				return -EFAULT;
 
 			addr = next_addr;
