@@ -32,13 +32,7 @@ int kwatch_deref_resolve(const struct kwatch_config *cfg, struct pt_regs *regs,
 
 	/* 2. Fast-Path Optimization: Local Stack Bounds Check */
 	if (cfg->base == KWATCH_BASE_STACK && cfg->offset_count == 1) {
-		ulong final_addr = addr + cfg->offsets[0];
-
-		if (final_addr < addr || (final_addr - addr) >= THREAD_SIZE ||
-		    cfg->watch_len > (THREAD_SIZE - (final_addr - addr))) {
-			return -ERANGE;
-		}
-		*out_addr = final_addr;
+		*out_addr = addr + cfg->offsets[0];
 		*out_len = cfg->watch_len;
 		return 0;
 	}
