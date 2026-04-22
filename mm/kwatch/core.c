@@ -122,11 +122,10 @@ static int parse_deref_chain(struct kwatch_config *cfg, char *val)
 		if (next_arrow)
 			*next_arrow = '\0';
 
-		if (*p == '\0') {
+		if (*p == '\0')
 			cfg->offsets[cfg->offset_count++] = 0;
-		} else if (kstrtol(p, 0, &cfg->offsets[cfg->offset_count++])) {
+		else if (kstrtol(p, 0, &cfg->offsets[cfg->offset_count++]))
 			return -EINVAL;
-		}
 
 		p = next_arrow ? next_arrow + 2 : NULL;
 	} else {
@@ -145,11 +144,10 @@ static int parse_deref_chain(struct kwatch_config *cfg, char *val)
 		if (next_arrow)
 			*next_arrow = '\0';
 
-		if (*p == '\0') {
+		if (*p == '\0')
 			cfg->offsets[cfg->offset_count++] = 0;
-		} else if (kstrtol(p, 0, &cfg->offsets[cfg->offset_count++])) {
+		else if (kstrtol(p, 0, &cfg->offsets[cfg->offset_count++]))
 			return -EINVAL;
-		}
 
 		p = next_arrow ? next_arrow + 2 : NULL;
 	}
