@@ -249,8 +249,8 @@ static ssize_t kwatch_dbgfs_read(struct file *file, char __user *user_buf,
 		if (kwatch_config.base == KWATCH_BASE_GLOBAL_SYM) {
 			len += scnprintf(out_buf + len,
 					 MAX_CONFIG_STR_LEN - len,
-					 "sym_addr=0x%px\n",
-					 (void *)kwatch_config.sym_addr);
+					 "sym_name=%s\n",
+					 kwatch_config.sym_name);
 		}
 
 		/* 3. Reconstruct the Unified Dereference Chain */
