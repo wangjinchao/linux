@@ -21,8 +21,10 @@ struct kwatch_watchpoint {
 	struct list_head list; // for cpu online and offline
 
 	/* Async disarm State */
+	struct work_struct destroy_work;
 	atomic_t pending_ipis;
 	atomic_t refcount;
+	bool teardown;
 
 	unsigned long func_start;
 	unsigned long func_end;

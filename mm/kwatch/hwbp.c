@@ -5,10 +5,11 @@
 #include <linux/ftrace.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/irqflags.h>
+#include <linux/kallsyms.h>
 #include <linux/mutex.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
-#include <linux/kallsyms.h>
+#include <linux/workqueue.h>
 
 #include "kwatch.h"
 
@@ -29,13 +30,8 @@ static void kwatch_hwbp_handler(struct perf_event *bp,
 	unsigned long ip = instruction_pointer(regs);
 	int i, nr = 0;
 
-	/*
-	 * SP-based Spatial Filter:
-	 * If regs->sp matches the activation frame (ctx->sp), the access
-	 * originates from the monitored function itself (or inline logic).
-	 * We ignore these to avoid self-inflicted false positives.
-	 */
-	if (ctx->sp && sp == ctx->sp && ip >= wp->func_start && ip < wp->func_end)
+	if (ctx->sp && sp == ctx->sp && ip >= wp->func_start &&
+	    ip < wp->func_end)
 		return;
 
 	nr = stack_trace_save_regs(regs, entries, TRAMPOLINE_CHECK_DEPTH, 0);
@@ -52,6 +48,17 @@ static void kwatch_hwbp_handler(struct perf_event *bp,
 bool kwatch_is_handler(struct perf_event *event)
 {
 	return unlikely(event->overflow_handler == kwatch_hwbp_handler);
+}
+
+static void kwatch_hwbp_destroy_work(struct work_struct *work)
+{
+	struct kwatch_watchpoint *wp =
+		container_of(work, struct kwatch_watchpoint, destroy_work);
+
+	unregister_wide_hw_breakpoint(wp->event);
+	free_percpu(wp->csd_arm);
+	free_percpu(wp->csd_disarm);
+	kfree(wp);
 }
 
 static void kwatch_hwbp_arm_local(void *info)
@@ -72,14 +79,22 @@ static void kwatch_hwbp_arm_local(void *info)
 	local_irq_restore(flags);
 }
 
+static inline void kwatch_hwbp_try_recycle(struct kwatch_watchpoint *wp)
+{
+	if (atomic_dec_and_test(&wp->pending_ipis)) {
+		if (!READ_ONCE(wp->teardown))
+			llist_add(&wp->node, &kwatch_free_wp_list);
+		if (atomic_dec_and_test(&wp->refcount))
+			schedule_work(&wp->destroy_work);
+	}
+}
+
 static void kwatch_hwbp_disarm_local(void *info)
 {
 	struct kwatch_watchpoint *wp = info;
 
 	kwatch_hwbp_arm_local(info);
-
-	if (atomic_dec_and_test(&wp->pending_ipis))
-		llist_add(&wp->node, &kwatch_free_wp_list);
+	kwatch_hwbp_try_recycle(wp);
 }
 
 static int kwatch_hwbp_cpu_online(unsigned int cpu)
@@ -124,14 +139,6 @@ static int kwatch_hwbp_cpu_offline(unsigned int cpu)
 	return 0;
 }
 
-static void kwatch_wp_destroy(struct kwatch_watchpoint *wp)
-{
-	unregister_wide_hw_breakpoint(wp->event);
-	free_percpu(wp->csd_arm);
-	free_percpu(wp->csd_disarm);
-	kfree(wp);
-}
-
 int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp)
 {
 	struct llist_node *node = llist_del_first(&kwatch_free_wp_list);
@@ -159,7 +166,6 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
 			   (type == KWATCH_ACCESS_RW) ? HW_BREAKPOINT_RW :
 							HW_BREAKPOINT_W;
 
-	/* FAST PATH OPTIMIZATION: Only track IPIs if we are disarming */
 	if (is_disarm) {
 		for_each_online_cpu(cpu)
 			target_count++;
@@ -167,21 +173,13 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
 	}
 
 	for_each_online_cpu(cpu) {
-		/* remote cpu first */
 		if (cpu == cur_cpu)
 			continue;
 		csd = per_cpu_ptr(is_disarm ? wp->csd_disarm : wp->csd_arm,
 				  cpu);
 
-		/** If the CPU went offline after we counted it but before we
-		 * queued the IPI, the queue fails. We must manually decrement.
-		 */
-		if (is_disarm && smp_call_function_single_async(cpu, csd)) {
-			if (atomic_dec_and_test(&wp->pending_ipis))
-				llist_add(&wp->node, &kwatch_free_wp_list);
-		} else if (!is_disarm) {
-			smp_call_function_single_async(cpu, csd);
-		}
+		if (smp_call_function_single_async(cpu, csd) && is_disarm)
+			kwatch_hwbp_try_recycle(wp);
 	}
 
 	if (is_disarm)
@@ -192,16 +190,14 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
 
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
 {
-	kwatch_hwbp_arm(wp, (unsigned long)&kwatch_dummy_holder, sizeof(unsigned long),
-			KWATCH_ACCESS_W);
+	kwatch_hwbp_arm(wp, (unsigned long)&kwatch_dummy_holder,
+			sizeof(unsigned long), KWATCH_ACCESS_W);
 
-	// Drop task ownership. If pool is gone (ref == 0), task frees it.
-	if (atomic_dec_and_test(&wp->refcount))
-		kwatch_wp_destroy(wp);
 	return 0;
 }
 
-int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start, unsigned long func_end)
+int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
+			 unsigned long func_end)
 {
 	struct kwatch_watchpoint *wp;
 	int success = 0, cpu;
@@ -228,6 +224,9 @@ int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start, unsigned long 
 			INIT_CSD(per_cpu_ptr(wp->csd_disarm, cpu),
 				 kwatch_hwbp_disarm_local, wp);
 		}
+
+		INIT_WORK(&wp->destroy_work, kwatch_hwbp_destroy_work);
+		wp->teardown = false;
 
 		hw_breakpoint_init(&wp->attr);
 		wp->attr.bp_addr = (unsigned long)&kwatch_dummy_holder;
@@ -273,12 +272,9 @@ void kwatch_hwbp_free(void)
 	list_for_each_entry_safe(wp, tmp, &kwatch_all_wp_list, list) {
 		list_del(&wp->list);
 
-		/* Drop pool ownership.
-		 * If a flying task holds it, ref drops to 1, and task frees it later.
-		 * If idle, ref drops to 0, and we free it immediately.
-		 */
+		WRITE_ONCE(wp->teardown, true);
 		if (atomic_dec_and_test(&wp->refcount))
-			kwatch_wp_destroy(wp);
+			schedule_work(&wp->destroy_work);
 	}
 	mutex_unlock(&kwatch_all_wp_mutex);
 }
