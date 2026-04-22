@@ -14,12 +14,13 @@
 
 struct kwatch_watchpoint {
 	struct perf_event *__percpu *event;
-	call_single_data_t __percpu *csd;
+	call_single_data_t __percpu *csd_arm;
+	call_single_data_t __percpu *csd_disarm;
 	struct perf_event_attr attr;
 	struct llist_node node; // for atomic get/put
 	struct list_head list; // for cpu online and offline
 
-	/* Async Reclaim State */
+	/* Async disarm State */
 	atomic_t pending_ipis;
 	atomic_t refcount;
 };

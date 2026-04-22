@@ -47,7 +47,6 @@ static void kwatch_hwbp_arm_local(void *info)
 	struct perf_event *bp;
 	ulong flags;
 	int cpu;
-	bool is_reclaim = (wp->attr.bp_addr == (ulong)&kwatch_dummy_holder);
 
 	local_irq_save(flags);
 	cpu = raw_smp_processor_id();
@@ -58,11 +57,16 @@ static void kwatch_hwbp_arm_local(void *info)
 			  "KWatch: reinstall HWBP failed on CPU%d", cpu);
 	}
 	local_irq_restore(flags);
+}
 
-	if (is_reclaim) {
-		if (atomic_dec_and_test(&wp->pending_ipis))
-			llist_add(&wp->node, &kwatch_free_wp_list);
-	}
+static void kwatch_hwbp_disarm_local(void *info)
+{
+	struct kwatch_watchpoint *wp = info;
+
+	kwatch_hwbp_arm_local(info);
+
+	if (atomic_dec_and_test(&wp->pending_ipis))
+		llist_add(&wp->node, &kwatch_free_wp_list);
 }
 
 static int kwatch_hwbp_cpu_online(unsigned int cpu)
@@ -83,7 +87,10 @@ static int kwatch_hwbp_cpu_online(unsigned int cpu)
 			continue;
 		}
 		per_cpu(*wp->event, cpu) = bp;
-		INIT_CSD(per_cpu_ptr(wp->csd, cpu), kwatch_hwbp_arm_local, wp);
+		INIT_CSD(per_cpu_ptr(wp->csd_arm, cpu), kwatch_hwbp_arm_local,
+			 wp);
+		INIT_CSD(per_cpu_ptr(wp->csd_disarm, cpu),
+			 kwatch_hwbp_disarm_local, wp);
 	}
 	mutex_unlock(&kwatch_all_wp_mutex);
 	return 0;
@@ -107,7 +114,8 @@ static int kwatch_hwbp_cpu_offline(unsigned int cpu)
 static void kwatch_wp_destroy(struct kwatch_watchpoint *wp)
 {
 	unregister_wide_hw_breakpoint(wp->event);
-	free_percpu(wp->csd);
+	free_percpu(wp->csd_arm);
+	free_percpu(wp->csd_disarm);
 	kfree(wp);
 }
 
@@ -129,7 +137,7 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, ulong addr, u16 len,
 	int cur_cpu = raw_smp_processor_id();
 	call_single_data_t *csd;
 	int cpu, target_count = 0;
-	bool is_reclaim = (addr == (ulong)&kwatch_dummy_holder);
+	bool is_disarm = (addr == (ulong)&kwatch_dummy_holder);
 
 	wp->attr.bp_addr = addr;
 	wp->attr.bp_len = len;
@@ -138,8 +146,8 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, ulong addr, u16 len,
 			   (type == KWATCH_ACCESS_RW) ? HW_BREAKPOINT_RW :
 							HW_BREAKPOINT_W;
 
-	/* FAST PATH OPTIMIZATION: Only track IPIs if we are reclaiming */
-	if (is_reclaim) {
+	/* FAST PATH OPTIMIZATION: Only track IPIs if we are disarming */
+	if (is_disarm) {
 		for_each_online_cpu(cpu)
 			target_count++;
 		atomic_set(&wp->pending_ipis, target_count);
@@ -149,20 +157,24 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, ulong addr, u16 len,
 		/* remote cpu first */
 		if (cpu == cur_cpu)
 			continue;
-		csd = per_cpu_ptr(wp->csd, cpu);
+		csd = per_cpu_ptr(is_disarm ? wp->csd_disarm : wp->csd_arm,
+				  cpu);
 
 		/** If the CPU went offline after we counted it but before we
 		 * queued the IPI, the queue fails. We must manually decrement.
 		 */
-		if (is_reclaim && smp_call_function_single_async(cpu, csd)) {
+		if (is_disarm && smp_call_function_single_async(cpu, csd)) {
 			if (atomic_dec_and_test(&wp->pending_ipis))
 				llist_add(&wp->node, &kwatch_free_wp_list);
-		} else if (!is_reclaim) {
+		} else if (!is_disarm) {
 			smp_call_function_single_async(cpu, csd);
 		}
 	}
 
-	kwatch_hwbp_arm_local(wp);
+	if (is_disarm)
+		kwatch_hwbp_disarm_local(wp);
+	else
+		kwatch_hwbp_arm_local(wp);
 }
 
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
@@ -188,15 +200,21 @@ int kwatch_hwbp_prealloc(u16 max_watch)
 		if (!wp)
 			break;
 
-		wp->csd = alloc_percpu(call_single_data_t);
-		if (!wp->csd) {
+		wp->csd_arm = alloc_percpu(call_single_data_t);
+		wp->csd_disarm = alloc_percpu(call_single_data_t);
+		if (!wp->csd_arm || !wp->csd_disarm) {
+			free_percpu(wp->csd_arm);
+			free_percpu(wp->csd_disarm);
 			kfree(wp);
 			break;
 		}
 
-		for_each_possible_cpu(cpu)
-			INIT_CSD(per_cpu_ptr(wp->csd, cpu),
+		for_each_possible_cpu(cpu) {
+			INIT_CSD(per_cpu_ptr(wp->csd_arm, cpu),
 				 kwatch_hwbp_arm_local, wp);
+			INIT_CSD(per_cpu_ptr(wp->csd_disarm, cpu),
+				 kwatch_hwbp_disarm_local, wp);
+		}
 
 		hw_breakpoint_init(&wp->attr);
 		wp->attr.bp_addr = (ulong)&kwatch_dummy_holder;
@@ -207,7 +225,8 @@ int kwatch_hwbp_prealloc(u16 max_watch)
 							kwatch_hwbp_handler,
 							wp);
 		if (IS_ERR((void *)wp->event)) {
-			free_percpu(wp->csd);
+			free_percpu(wp->csd_arm);
+			free_percpu(wp->csd_disarm);
 			kfree(wp);
 			break;
 		}

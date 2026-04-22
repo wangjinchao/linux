@@ -30,7 +30,7 @@ int kwatch_deref_resolve(const struct kwatch_config *cfg, struct pt_regs *regs,
 		return -EINVAL;
 	}
 
-	/* 2. Fast-Path Optimization: Local Stack Bounds Check */
+	/* 2. Fast-Path Optimization: Local Stack Offset Calculation */
 	if (cfg->base == KWATCH_BASE_STACK && cfg->offset_count == 1) {
 		*out_addr = addr + cfg->offsets[0];
 		*out_len = cfg->watch_len;
