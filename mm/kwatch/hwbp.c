@@ -170,7 +170,7 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len)
 	wp->attr.bp_addr = addr;
 	wp->attr.bp_len = len;
 
-	atomic_set(&wp->pending_ipis, 0);
+	atomic_set(&wp->pending_ipis, 1);
 	cur_cpu = get_cpu();
 	for_each_online_cpu(cpu) {
 		if (cpu == cur_cpu)
