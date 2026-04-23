@@ -212,6 +212,28 @@ int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
 	return 0;
 }
 
+void kwatch_hwbp_free(void)
+{
+	struct kwatch_watchpoint *wp, *tmp;
+
+	llist_del_all(&kwatch_free_wp_list);
+
+	if (kwatch_hwbp_cpuhp_state != CPUHP_INVALID) {
+		cpuhp_remove_state_nocalls(kwatch_hwbp_cpuhp_state);
+		kwatch_hwbp_cpuhp_state = CPUHP_INVALID;
+	}
+
+	mutex_lock(&kwatch_all_wp_mutex);
+	list_for_each_entry_safe(wp, tmp, &kwatch_all_wp_list, list) {
+		list_del(&wp->list);
+
+		WRITE_ONCE(wp->teardown, true);
+		if (atomic_dec_and_test(&wp->refcount))
+			schedule_work(&wp->destroy_work);
+	}
+	mutex_unlock(&kwatch_all_wp_mutex);
+}
+
 int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
 			 unsigned long func_end,
 			 enum kwatch_access_type access_type)
@@ -295,31 +317,11 @@ int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
 	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN, "kwatch:online",
 					kwatch_hwbp_cpu_online,
 					kwatch_hwbp_cpu_offline);
-	if (ret < 0)
+	if (ret < 0) {
+		kwatch_hwbp_free();
 		return ret;
+	}
 
 	kwatch_hwbp_cpuhp_state = ret;
 	return 0;
-}
-
-void kwatch_hwbp_free(void)
-{
-	struct kwatch_watchpoint *wp, *tmp;
-
-	llist_del_all(&kwatch_free_wp_list);
-
-	if (kwatch_hwbp_cpuhp_state != CPUHP_INVALID) {
-		cpuhp_remove_state_nocalls(kwatch_hwbp_cpuhp_state);
-		kwatch_hwbp_cpuhp_state = CPUHP_INVALID;
-	}
-
-	mutex_lock(&kwatch_all_wp_mutex);
-	list_for_each_entry_safe(wp, tmp, &kwatch_all_wp_list, list) {
-		list_del(&wp->list);
-
-		WRITE_ONCE(wp->teardown, true);
-		if (atomic_dec_and_test(&wp->refcount))
-			schedule_work(&wp->destroy_work);
-	}
-	mutex_unlock(&kwatch_all_wp_mutex);
 }
