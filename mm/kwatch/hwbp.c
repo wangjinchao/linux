@@ -72,10 +72,16 @@ static void kwatch_hwbp_arm_local(void *info)
 	cpu = raw_smp_processor_id();
 	bp = per_cpu(*wp->event, cpu);
 
+	kwatch_probe_mute(true);
+	barrier();
+
 	if (likely(bp)) {
 		WARN_ONCE(modify_wide_hw_breakpoint_local(bp, &wp->attr),
 			  "KWatch: reinstall HWBP failed on CPU%d", cpu);
 	}
+
+	barrier();
+	kwatch_probe_mute(false);
 	local_irq_restore(flags);
 }
 

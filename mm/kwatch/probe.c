@@ -20,6 +20,8 @@ bool kwatch_probe_in_trampoline(unsigned long ip)
 	return false;
 }
 
+static DEFINE_PER_CPU(bool, kwatch_probe_cpu_muted);
+
 struct kwatch_probe_ctx {
 	struct kprobe kp;
 	struct kretprobe rp;
@@ -31,6 +33,15 @@ struct kwatch_probe_ctx {
 
 static struct kwatch_probe_ctx kwatch_probe_ctx;
 
+void kwatch_probe_mute(bool mute)
+{
+	__this_cpu_write(kwatch_probe_cpu_muted, mute);
+}
+
+static inline bool kwatch_probe_is_muted(void)
+{
+	return __this_cpu_read(kwatch_probe_cpu_muted);
+}
 void kwatch_tsk_ctx_reset(void)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
@@ -131,6 +142,9 @@ static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 	if (unlikely(in_nmi()))
 		return 0;
 
+	if (unlikely(kwatch_probe_is_muted()))
+		return 0;
+
 	if (ctx->depth != kwatch_probe_ctx.cfg->depth + 1 || ctx->wp)
 		return 0;
 
@@ -200,7 +214,6 @@ void kwatch_probe_stop(void)
 
 	unregister_kprobe(&kwatch_probe_ctx.kp);
 	unregister_kretprobe(&kwatch_probe_ctx.rp);
-	synchronize_rcu();
 
 	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
 }
