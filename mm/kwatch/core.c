@@ -36,9 +36,8 @@ static int kwatch_start_watching(void)
 	if (!kallsyms_lookup_size_offset(addr, &size, NULL))
 		return -ENOENT;
 
-	ret = kwatch_hwbp_prealloc(kwatch_config.max_watch,
-				   addr,
-				   addr + size);
+	ret = kwatch_hwbp_prealloc(kwatch_config.max_watch, addr, addr + size,
+				   kwatch_config.access_type);
 	if (ret) {
 		pr_err("kwatch_hwbp_prealloc ret: %d\n", ret);
 		return ret;

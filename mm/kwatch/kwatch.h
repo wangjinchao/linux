@@ -28,7 +28,6 @@ struct kwatch_watchpoint {
 
 	unsigned long func_start;
 	unsigned long func_end;
-
 };
 
 enum kwatch_access_type {
@@ -65,11 +64,12 @@ struct kwatch_config {
 	u8 offset_count;
 };
 
-int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start, unsigned long func_end);
+int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
+			 unsigned long func_end,
+			 enum kwatch_access_type access_type);
 void kwatch_hwbp_free(void);
 int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp);
-void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
-		     enum kwatch_access_type type);
+void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len);
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp);
 
 int kwatch_probe_start(struct kwatch_config *cfg);

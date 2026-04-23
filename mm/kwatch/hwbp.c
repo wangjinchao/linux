@@ -153,8 +153,7 @@ int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp)
 	return 0;
 }
 
-void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
-		     enum kwatch_access_type type)
+void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len)
 {
 	int cur_cpu;
 	call_single_data_t *csd;
@@ -163,10 +162,6 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
 
 	wp->attr.bp_addr = addr;
 	wp->attr.bp_len = len;
-	wp->attr.bp_type = (type == KWATCH_ACCESS_X)  ? HW_BREAKPOINT_X :
-			   (type == KWATCH_ACCESS_R)  ? HW_BREAKPOINT_R :
-			   (type == KWATCH_ACCESS_RW) ? HW_BREAKPOINT_RW :
-							HW_BREAKPOINT_W;
 
 	atomic_set(&wp->pending_ipis, 0);
 	cur_cpu = get_cpu();
@@ -194,17 +189,34 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
 {
 	kwatch_hwbp_arm(wp, (unsigned long)&kwatch_dummy_holder,
-			sizeof(unsigned long), KWATCH_ACCESS_W);
+			sizeof(unsigned long));
 
 	return 0;
 }
 
 int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
-			 unsigned long func_end)
+			 unsigned long func_end,
+			 enum kwatch_access_type access_type)
 {
 	struct kwatch_watchpoint *wp;
 	int success = 0, cpu;
+	u32 bp_type;
 
+	switch (access_type) {
+	case KWATCH_ACCESS_X:
+		bp_type = HW_BREAKPOINT_X;
+		break;
+	case KWATCH_ACCESS_R:
+		bp_type = HW_BREAKPOINT_R;
+		break;
+	case KWATCH_ACCESS_RW:
+		bp_type = HW_BREAKPOINT_RW;
+		break;
+	case KWATCH_ACCESS_W:
+	default:
+		bp_type = HW_BREAKPOINT_W;
+		break;
+	}
 	init_llist_head(&kwatch_free_wp_list);
 
 	while (!max_watch || success < max_watch) {
@@ -234,7 +246,7 @@ int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
 		hw_breakpoint_init(&wp->attr);
 		wp->attr.bp_addr = (unsigned long)&kwatch_dummy_holder;
 		wp->attr.bp_len = sizeof(unsigned long);
-		wp->attr.bp_type = HW_BREAKPOINT_W;
+		wp->attr.bp_type = bp_type;
 
 		wp->event = register_wide_hw_breakpoint(&wp->attr,
 							kwatch_hwbp_handler,

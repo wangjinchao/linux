@@ -117,7 +117,6 @@ static int kwatch_lifecycle_exit(struct kretprobe_instance *ri,
 static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
-	enum kwatch_access_type type = kwatch_probe_ctx.cfg->access_type;
 	unsigned long watch_addr;
 	u16 watch_len;
 
@@ -130,7 +129,7 @@ static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 	if (kwatch_hwbp_get(&ctx->wp))
 		return 0;
 
-	kwatch_hwbp_arm(ctx->wp, watch_addr, watch_len, type);
+	kwatch_hwbp_arm(ctx->wp, watch_addr, watch_len);
 	return 0;
 }
 
