@@ -8,7 +8,7 @@ struct kwatch_tsk_ctx {
 	struct kwatch_watchpoint *wp;
 	ulong sp;
 	u16 depth;
-	u16 generation;
+	u32 epoch;
 };
 
 #endif /* _LINUX_KWATCH_TYPES_H */

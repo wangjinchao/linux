@@ -1,22 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0
-#include <linux/compiler.h>
 #include <linux/kprobes.h>
-#include <linux/fprobe.h>
-#include <linux/preempt.h>
-#include <linux/rethook.h>
+#include <linux/kallsyms.h>
+#include <linux/percpu.h>
 #include <linux/sched.h>
+#include <linux/stacktrace.h>
 
 #include "kwatch.h"
 
 #define TRAMPOLINE_CHECK_DEPTH 16
 static DEFINE_PER_CPU(bool, kwatch_probe_cpu_muted);
+
 struct kwatch_probe_ctx {
 	struct kprobe kp;
 	struct kretprobe rp;
 	const struct kwatch_config *cfg;
 
-	bool enable;
-	u16 generation;
+	u32 epoch;
 
 	unsigned long func_start;
 	unsigned long func_end;
@@ -29,7 +27,8 @@ static bool kwatch_probe_in_trampoline(unsigned long ip)
 #ifdef CONFIG_RETHOOK
 	if (is_rethook_trampoline(ip))
 		return true;
-#else
+#endif
+#ifdef CONFIG_KPROBES
 	if (is_kretprobe_trampoline(ip))
 		return true;
 #endif
@@ -53,6 +52,7 @@ bool kwatch_probe_validate_hit(struct pt_regs *regs)
 		if (kwatch_probe_in_trampoline(entries[i]))
 			return false;
 	}
+
 	return true;
 }
 
@@ -65,54 +65,55 @@ static inline bool kwatch_probe_is_muted(void)
 {
 	return __this_cpu_read(kwatch_probe_cpu_muted);
 }
+
 void kwatch_tsk_ctx_reset(void)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
 
-	if (ctx->wp)
+	if (ctx->wp) {
 		kwatch_hwbp_put(ctx->wp);
-
-	ctx->wp = NULL;
-	ctx->sp = 0;
+		ctx->wp = NULL;
+	}
 	ctx->depth = 0;
-	ctx->generation = READ_ONCE(kwatch_probe_ctx.generation);
+	ctx->sp = 0;
 }
 
-static bool kwatch_tsk_ctx_check(bool entry)
+enum kwatch_probe_position {
+	KWATCH_PROBE_POSITION_ENTRY,
+	KWATCH_PROBE_POSITION_ACTIVE,
+	KWATCH_PROBE_POSITION_EXIT
+};
+
+static bool kwatch_tsk_ctx_check(enum kwatch_probe_position pos)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
 
-	/*
-	 * smp_load_acquire() ensures we only read the updated configuration
-	 * and generation counter after observing that the framework is enabled.
-	 * Pairs with smp_store_release() in kwatch_probe_start() and stop().
-	 */
-	u16 cur_enable = smp_load_acquire(&kwatch_probe_ctx.enable);
-	u16 cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
-	u16 cur_depth, target_depth = kwatch_probe_ctx.cfg->depth;
+	/* Pairs with smp_store_release() in kwatch_probe_start/stop() */
+	u32 epoch = smp_load_acquire(&kwatch_probe_ctx.epoch);
 
-	if (!cur_enable) {
+	if (unlikely(ctx->epoch != epoch)) {
 		kwatch_tsk_ctx_reset();
-		return false;
+		ctx->epoch = epoch;
 	}
 
-	if (ctx->generation != cur_generation)
-		kwatch_tsk_ctx_reset();
-
-	if (!entry && !ctx->depth) {
-		kwatch_tsk_ctx_reset();
+	if (unlikely(!epoch))
 		return false;
-	}
 
-	if (entry)
-		cur_depth = ctx->depth++;
-	else
-		cur_depth = --ctx->depth;
-
-	if (cur_depth == target_depth)
+	switch (pos) {
+	case KWATCH_PROBE_POSITION_ENTRY:
+		ctx->depth++;
 		return true;
-	else
-		return false;
+	case KWATCH_PROBE_POSITION_ACTIVE:
+		return true;
+	case KWATCH_PROBE_POSITION_EXIT:
+		if (unlikely(ctx->depth == 0)) {
+			kwatch_tsk_ctx_reset();
+			return false;
+		}
+
+		ctx->depth--;
+		return true;
+	}
 }
 
 static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
@@ -127,6 +128,9 @@ static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 	if (unlikely(kwatch_probe_is_muted()))
 		return 0;
 
+	if (unlikely(!kwatch_tsk_ctx_check(KWATCH_PROBE_POSITION_ACTIVE)))
+		return 0;
+
 	if (ctx->depth != kwatch_probe_ctx.cfg->depth + 1 || ctx->wp)
 		return 0;
 
@@ -137,6 +141,8 @@ static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 	if (kwatch_hwbp_get(&ctx->wp))
 		return 0;
 
+	ctx->sp = kernel_stack_pointer(regs);
+
 	kwatch_hwbp_arm(ctx->wp, watch_addr, watch_len);
 	return 0;
 }
@@ -144,19 +150,11 @@ static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 static int kwatch_lifecycle_entry(struct kretprobe_instance *ri,
 				  struct pt_regs *regs)
 {
-	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
-	unsigned long stack_pointer = kernel_stack_pointer(regs);
-
 	if (unlikely(in_nmi()))
-		return 0;
-
-	if (ctx->wp && ctx->sp == stack_pointer)
 		return 0;
 
 	if (!kwatch_tsk_ctx_check(true))
 		return 0;
-
-	ctx->sp = stack_pointer;
 
 	if (kwatch_probe_ctx.cfg->func_offset == 0)
 		kwatch_activate_handler(NULL, regs);
@@ -172,16 +170,14 @@ static int kwatch_lifecycle_exit(struct kretprobe_instance *ri,
 	if (unlikely(in_nmi()))
 		return 0;
 
-	if (kwatch_tsk_ctx_check(false)) {
-		if (ctx->wp) {
-			kwatch_hwbp_put(ctx->wp);
-			ctx->wp = NULL;
-		}
+	if (!kwatch_tsk_ctx_check(false))
+		return 0;
+
+	if (ctx->depth == kwatch_probe_ctx.cfg->depth && ctx->wp) {
+		kwatch_hwbp_put(ctx->wp);
+		ctx->wp = NULL;
 		ctx->sp = 0;
 	}
-
-	if (ctx->depth == 0)
-		kwatch_tsk_ctx_reset();
 
 	return 0;
 }
@@ -189,13 +185,16 @@ static int kwatch_lifecycle_exit(struct kretprobe_instance *ri,
 int kwatch_probe_start(struct kwatch_config *cfg, unsigned long func_start,
 		       unsigned long func_end)
 {
-	u16 cur_generation;
+	static u32 next_epoch;
+	u32 current_epoch;
 	int ret;
 
-	if (kwatch_probe_ctx.enable)
+	/*
+	 * Lockless check to prevent concurrent starts. Strictly serialized
+	 * by the control plane mutex, but serves as a sanity check.
+	 */
+	if (smp_load_acquire(&kwatch_probe_ctx.epoch) != 0)
 		return -EBUSY;
-
-	cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
 
 	memset(&kwatch_probe_ctx, 0, sizeof(kwatch_probe_ctx));
 	kwatch_probe_ctx.cfg = cfg;
@@ -222,32 +221,26 @@ int kwatch_probe_start(struct kwatch_config *cfg, unsigned long func_start,
 		}
 	}
 
-	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
+	current_epoch = ++next_epoch;
+	if (unlikely(!current_epoch))
+		current_epoch = ++next_epoch;
 
-	/*
-	 * smp_store_release() ensures that updates to the configuration pointer
-	 * and generation counter are fully visible to other CPUs before enabling.
-	 * Pairs with smp_load_acquire() in kwatch_tsk_ctx_check().
-	 */
-	smp_store_release(&kwatch_probe_ctx.enable, true);
+	/* Pairs with smp_load_acquire() in kwatch_tsk_ctx_check() */
+	smp_store_release(&kwatch_probe_ctx.epoch, current_epoch);
+
 	return 0;
 }
 
 void kwatch_probe_stop(void)
 {
-	u16 cur_generation = READ_ONCE(kwatch_probe_ctx.generation);
+	if (!kwatch_probe_ctx.epoch)
+		return;
 
-	/*
-	 * smp_store_release() ensures the disabled state is visible to fast-path
-	 * readers before we increment the generation counter to flush old contexts.
-	 * Pairs with smp_load_acquire() in kwatch_tsk_ctx_check().
-	 */
-	smp_store_release(&kwatch_probe_ctx.enable, false);
+	/* Pairs with smp_load_acquire() in kwatch_tsk_ctx_check() */
+	smp_store_release(&kwatch_probe_ctx.epoch, 0);
 
 	if (kwatch_probe_ctx.cfg->func_offset > 0)
 		unregister_kprobe(&kwatch_probe_ctx.kp);
 
 	unregister_kretprobe(&kwatch_probe_ctx.rp);
-
-	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
 }
