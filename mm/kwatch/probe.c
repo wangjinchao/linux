@@ -92,47 +92,6 @@ static bool kwatch_tsk_ctx_check(bool entry)
 		return false;
 }
 
-static int kwatch_lifecycle_entry(struct kretprobe_instance *ri,
-				  struct pt_regs *regs)
-{
-	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
-	unsigned long stack_pointer = kernel_stack_pointer(regs);
-
-	if (unlikely(in_nmi()))
-		return 0;
-
-	if (ctx->wp && ctx->sp == stack_pointer)
-		return 0;
-
-	if (!kwatch_tsk_ctx_check(true))
-		return 0;
-
-	ctx->sp = stack_pointer;
-	return 0;
-}
-
-static int kwatch_lifecycle_exit(struct kretprobe_instance *ri,
-				 struct pt_regs *regs)
-{
-	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
-
-	if (unlikely(in_nmi()))
-		return 0;
-
-	if (kwatch_tsk_ctx_check(false)) {
-		if (ctx->wp) {
-			kwatch_hwbp_put(ctx->wp);
-			ctx->wp = NULL;
-		}
-		ctx->sp = 0;
-	}
-
-	if (ctx->depth == 0)
-		kwatch_tsk_ctx_reset();
-
-	return 0;
-}
-
 static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
@@ -159,6 +118,51 @@ static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 	return 0;
 }
 
+static int kwatch_lifecycle_entry(struct kretprobe_instance *ri,
+				  struct pt_regs *regs)
+{
+	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
+	unsigned long stack_pointer = kernel_stack_pointer(regs);
+
+	if (unlikely(in_nmi()))
+		return 0;
+
+	if (ctx->wp && ctx->sp == stack_pointer)
+		return 0;
+
+	if (!kwatch_tsk_ctx_check(true))
+		return 0;
+
+	ctx->sp = stack_pointer;
+
+	if (kwatch_probe_ctx.cfg->func_offset == 0)
+		kwatch_activate_handler(NULL, regs);
+
+	return 0;
+}
+
+static int kwatch_lifecycle_exit(struct kretprobe_instance *ri,
+				 struct pt_regs *regs)
+{
+	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
+
+	if (unlikely(in_nmi()))
+		return 0;
+
+	if (kwatch_tsk_ctx_check(false)) {
+		if (ctx->wp) {
+			kwatch_hwbp_put(ctx->wp);
+			ctx->wp = NULL;
+		}
+		ctx->sp = 0;
+	}
+
+	if (ctx->depth == 0)
+		kwatch_tsk_ctx_reset();
+
+	return 0;
+}
+
 int kwatch_probe_start(struct kwatch_config *cfg)
 {
 	u16 cur_generation;
@@ -180,14 +184,16 @@ int kwatch_probe_start(struct kwatch_config *cfg)
 	if (ret < 0)
 		return ret;
 
-	kwatch_probe_ctx.kp.symbol_name = cfg->func_name;
-	kwatch_probe_ctx.kp.offset = cfg->func_offset;
-	kwatch_probe_ctx.kp.pre_handler = kwatch_activate_handler;
+	if (cfg->func_offset) {
+		kwatch_probe_ctx.kp.symbol_name = cfg->func_name;
+		kwatch_probe_ctx.kp.offset = cfg->func_offset;
+		kwatch_probe_ctx.kp.pre_handler = kwatch_activate_handler;
 
-	ret = register_kprobe(&kwatch_probe_ctx.kp);
-	if (ret) {
-		unregister_kretprobe(&kwatch_probe_ctx.rp);
-		return ret;
+		ret = register_kprobe(&kwatch_probe_ctx.kp);
+		if (ret) {
+			unregister_kretprobe(&kwatch_probe_ctx.rp);
+			return ret;
+		}
 	}
 
 	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
@@ -212,7 +218,9 @@ void kwatch_probe_stop(void)
 	 */
 	smp_store_release(&kwatch_probe_ctx.enable, false);
 
-	unregister_kprobe(&kwatch_probe_ctx.kp);
+	if (kwatch_probe_ctx.cfg->func_offset > 0)
+		unregister_kprobe(&kwatch_probe_ctx.kp);
+
 	unregister_kretprobe(&kwatch_probe_ctx.rp);
 
 	WRITE_ONCE(kwatch_probe_ctx.generation, cur_generation + 1);
