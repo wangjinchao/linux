@@ -52,6 +52,10 @@ int kwatch_deref_resolve(const struct kwatch_config *cfg, struct pt_regs *regs,
 		}
 	}
 
+	/* Enforce strict Kernel-Space boundary */
+	if (unlikely(addr < TASK_SIZE_MAX))
+		return -EINVAL;
+
 	*out_addr = addr;
 	*out_len = cfg->watch_len;
 	return 0;
