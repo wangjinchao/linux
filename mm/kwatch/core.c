@@ -22,6 +22,8 @@ static bool watching_active;
 static int kwatch_start_watching(void)
 {
 	unsigned long addr, size;
+	unsigned long func_start;
+	unsigned long func_end;
 	int ret;
 
 	/* 1. Resolve the entry point address */
@@ -36,14 +38,16 @@ static int kwatch_start_watching(void)
 	if (!kallsyms_lookup_size_offset(addr, &size, NULL))
 		return -ENOENT;
 
-	ret = kwatch_hwbp_prealloc(kwatch_config.max_watch, addr, addr + size,
+	ret = kwatch_hwbp_prealloc(kwatch_config.max_watch,
 				   kwatch_config.access_type);
 	if (ret) {
 		pr_err("kwatch_hwbp_prealloc ret: %d\n", ret);
 		return ret;
 	}
 
-	ret = kwatch_probe_start(&kwatch_config);
+	func_start = addr;
+	func_end = addr + size;
+	ret = kwatch_probe_start(&kwatch_config, func_start, func_end);
 	if (ret) {
 		pr_err("kwatch_probe_start ret: %d\n", ret);
 		kwatch_hwbp_free();

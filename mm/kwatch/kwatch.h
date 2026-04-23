@@ -25,9 +25,6 @@ struct kwatch_watchpoint {
 	atomic_t pending_ipis;
 	atomic_t refcount;
 	bool teardown;
-
-	unsigned long func_start;
-	unsigned long func_end;
 };
 
 enum kwatch_access_type {
@@ -64,21 +61,20 @@ struct kwatch_config {
 	u8 offset_count;
 };
 
-int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
-			 unsigned long func_end,
-			 enum kwatch_access_type access_type);
+int kwatch_hwbp_prealloc(u16 max_watch, enum kwatch_access_type access_type);
 void kwatch_hwbp_free(void);
 int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp);
 void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len);
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp);
 
-int kwatch_probe_start(struct kwatch_config *cfg);
+int kwatch_probe_start(struct kwatch_config *cfg, unsigned long func_start,
+		       unsigned long func_end);
 void kwatch_probe_stop(void);
 void kwatch_probe_mute(bool mute);
+bool kwatch_probe_validate_hit(struct pt_regs *regs);
 
 void kwatch_tsk_ctx_reset(void);
 bool kwatch_is_handler(struct perf_event *event);
-bool kwatch_probe_in_trampoline(unsigned long ip);
 
 int kwatch_deref_resolve(const struct kwatch_config *cfg, struct pt_regs *regs,
 			 unsigned long *out_addr, u16 *out_len);

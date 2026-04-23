@@ -8,7 +8,23 @@
 
 #include "kwatch.h"
 
-bool kwatch_probe_in_trampoline(unsigned long ip)
+#define TRAMPOLINE_CHECK_DEPTH 16
+static DEFINE_PER_CPU(bool, kwatch_probe_cpu_muted);
+struct kwatch_probe_ctx {
+	struct kprobe kp;
+	struct kretprobe rp;
+	const struct kwatch_config *cfg;
+
+	bool enable;
+	u16 generation;
+
+	unsigned long func_start;
+	unsigned long func_end;
+};
+
+static struct kwatch_probe_ctx kwatch_probe_ctx;
+
+static bool kwatch_probe_in_trampoline(unsigned long ip)
 {
 #ifdef CONFIG_RETHOOK
 	if (is_rethook_trampoline(ip))
@@ -20,18 +36,25 @@ bool kwatch_probe_in_trampoline(unsigned long ip)
 	return false;
 }
 
-static DEFINE_PER_CPU(bool, kwatch_probe_cpu_muted);
+bool kwatch_probe_validate_hit(struct pt_regs *regs)
+{
+	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
+	unsigned long sp = kernel_stack_pointer(regs);
+	unsigned long ip = instruction_pointer(regs);
+	unsigned long entries[TRAMPOLINE_CHECK_DEPTH];
+	int i, nr;
 
-struct kwatch_probe_ctx {
-	struct kprobe kp;
-	struct kretprobe rp;
-	const struct kwatch_config *cfg;
+	if (ctx->sp && sp == ctx->sp && ip >= kwatch_probe_ctx.func_start &&
+	    ip < kwatch_probe_ctx.func_end)
+		return false;
 
-	bool enable;
-	u16 generation;
-};
-
-static struct kwatch_probe_ctx kwatch_probe_ctx;
+	nr = stack_trace_save_regs(regs, entries, TRAMPOLINE_CHECK_DEPTH, 0);
+	for (i = 0; i < nr; i++) {
+		if (kwatch_probe_in_trampoline(entries[i]))
+			return false;
+	}
+	return true;
+}
 
 void kwatch_probe_mute(bool mute)
 {
@@ -163,7 +186,8 @@ static int kwatch_lifecycle_exit(struct kretprobe_instance *ri,
 	return 0;
 }
 
-int kwatch_probe_start(struct kwatch_config *cfg)
+int kwatch_probe_start(struct kwatch_config *cfg, unsigned long func_start,
+		       unsigned long func_end)
 {
 	u16 cur_generation;
 	int ret;
@@ -175,6 +199,8 @@ int kwatch_probe_start(struct kwatch_config *cfg)
 
 	memset(&kwatch_probe_ctx, 0, sizeof(kwatch_probe_ctx));
 	kwatch_probe_ctx.cfg = cfg;
+	kwatch_probe_ctx.func_start = func_start;
+	kwatch_probe_ctx.func_end = func_end;
 
 	kwatch_probe_ctx.rp.entry_handler = kwatch_lifecycle_entry;
 	kwatch_probe_ctx.rp.handler = kwatch_lifecycle_exit;

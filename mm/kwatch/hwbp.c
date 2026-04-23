@@ -18,28 +18,13 @@ static LIST_HEAD(kwatch_all_wp_list);
 static DEFINE_MUTEX(kwatch_all_wp_mutex);
 static unsigned long kwatch_dummy_holder __aligned(8);
 static int kwatch_hwbp_cpuhp_state = CPUHP_INVALID;
-#define TRAMPOLINE_CHECK_DEPTH 16
 
 static void kwatch_hwbp_handler(struct perf_event *bp,
 				struct perf_sample_data *data,
 				struct pt_regs *regs)
 {
-	unsigned long entries[TRAMPOLINE_CHECK_DEPTH];
-	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
-	struct kwatch_watchpoint *wp = bp->overflow_handler_context;
-	unsigned long sp = kernel_stack_pointer(regs);
-	unsigned long ip = instruction_pointer(regs);
-	int i, nr = 0;
-
-	if (ctx->sp && sp == ctx->sp && ip >= wp->func_start &&
-	    ip < wp->func_end)
+	if (!kwatch_probe_validate_hit(regs))
 		return;
-
-	nr = stack_trace_save_regs(regs, entries, TRAMPOLINE_CHECK_DEPTH, 0);
-	for (i = 0; i < nr; i++) {
-		if (kwatch_probe_in_trampoline(entries[i]))
-			return;
-	}
 
 	pr_warn("========== KWatch Fired =======\n");
 	dump_stack();
@@ -230,9 +215,7 @@ void kwatch_hwbp_free(void)
 	mutex_unlock(&kwatch_all_wp_mutex);
 }
 
-int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
-			 unsigned long func_end,
-			 enum kwatch_access_type access_type)
+int kwatch_hwbp_prealloc(u16 max_watch, enum kwatch_access_type access_type)
 {
 	struct kwatch_watchpoint *wp;
 	int success = 0, cpu;
@@ -294,9 +277,6 @@ int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
 			kfree(wp);
 			break;
 		}
-
-		wp->func_start = func_start;
-		wp->func_end = func_end;
 
 		atomic_set(&wp->refcount, 1);
 
