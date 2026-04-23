@@ -157,9 +157,13 @@ static int kwatch_config_parse(char *buf, struct kwatch_config *cfg)
 			ret = kstrtou16(val, 0, &cfg->func_offset);
 		else if (!strcmp(key, "depth"))
 			ret = kstrtou16(val, 0, &cfg->depth);
-		else if (!strcmp(key, "watch_len"))
+		else if (!strcmp(key, "watch_len")) {
 			ret = kstrtou16(val, 0, &cfg->watch_len);
-		else if (!strcmp(key, "target"))
+			if (!ret && cfg->watch_len != 1 &&
+			    cfg->watch_len != 2 && cfg->watch_len != 4 &&
+			    cfg->watch_len != 8)
+				ret = -EINVAL;
+		} else if (!strcmp(key, "target"))
 			ret = parse_deref_chain(cfg, val);
 
 		if (ret)
