@@ -232,7 +232,7 @@ int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
 		hw_breakpoint_init(&wp->attr);
 		wp->attr.bp_addr = (unsigned long)&kwatch_dummy_holder;
 		wp->attr.bp_len = sizeof(unsigned long);
-		wp->attr.bp_type = HW_BREAKPOINT_X;
+		wp->attr.bp_type = HW_BREAKPOINT_W;
 
 		wp->event = register_wide_hw_breakpoint(&wp->attr,
 							kwatch_hwbp_handler,
