@@ -348,15 +348,7 @@ err_dir:
 	return ret;
 }
 
-static void __exit kwatch_exit(void)
-{
-	kwatch_stop_watching();
-	debugfs_remove_recursive(dbgfs_dir);
-	pr_info("module unloaded\n");
-}
-
 module_init(kwatch_init);
-module_exit(kwatch_exit);
 
 MODULE_AUTHOR("Jinchao Wang");
 MODULE_DESCRIPTION("Kernel watchpoint");
