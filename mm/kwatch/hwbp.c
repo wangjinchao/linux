@@ -17,6 +17,7 @@ static LLIST_HEAD(kwatch_free_wp_list);
 static LIST_HEAD(kwatch_all_wp_list);
 static DEFINE_MUTEX(kwatch_all_wp_mutex);
 static unsigned long kwatch_dummy_holder __aligned(8);
+static int kwatch_hwbp_cpuhp_state = CPUHP_INVALID;
 #define TRAMPOLINE_CHECK_DEPTH 16
 
 static void kwatch_hwbp_handler(struct perf_event *bp,
@@ -207,6 +208,7 @@ int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
 	struct kwatch_watchpoint *wp;
 	int success = 0, cpu;
 	u32 bp_type;
+	int ret;
 
 	switch (access_type) {
 	case KWATCH_ACCESS_X:
@@ -276,12 +278,17 @@ int kwatch_hwbp_prealloc(u16 max_watch, unsigned long func_start,
 		success++;
 	}
 
-	if (success > 0)
-		cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN, "kwatch:online",
-					  kwatch_hwbp_cpu_online,
-					  kwatch_hwbp_cpu_offline);
+	if (!success)
+		return -EBUSY;
 
-	return success > 0 ? 0 : -EBUSY;
+	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN, "kwatch:online",
+					kwatch_hwbp_cpu_online,
+					kwatch_hwbp_cpu_offline);
+	if (ret < 0)
+		return ret;
+
+	kwatch_hwbp_cpuhp_state = ret;
+	return 0;
 }
 
 void kwatch_hwbp_free(void)
@@ -289,7 +296,11 @@ void kwatch_hwbp_free(void)
 	struct kwatch_watchpoint *wp, *tmp;
 
 	llist_del_all(&kwatch_free_wp_list);
-	cpuhp_remove_state_nocalls(CPUHP_AP_ONLINE_DYN);
+
+	if (kwatch_hwbp_cpuhp_state != CPUHP_INVALID) {
+		cpuhp_remove_state_nocalls(kwatch_hwbp_cpuhp_state);
+		kwatch_hwbp_cpuhp_state = CPUHP_INVALID;
+	}
 
 	mutex_lock(&kwatch_all_wp_mutex);
 	list_for_each_entry_safe(wp, tmp, &kwatch_all_wp_list, list) {
