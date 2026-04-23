@@ -130,10 +130,6 @@ static int kwatch_hwbp_cpu_online(unsigned int cpu)
 			continue;
 		}
 		per_cpu(*wp->event, cpu) = bp;
-		INIT_CSD(per_cpu_ptr(wp->csd_arm, cpu), kwatch_hwbp_arm_local,
-			 wp);
-		INIT_CSD(per_cpu_ptr(wp->csd_disarm, cpu),
-			 kwatch_hwbp_disarm_local, wp);
 	}
 	mutex_unlock(&kwatch_all_wp_mutex);
 	return 0;
