@@ -132,8 +132,10 @@ static int kwatch_hwbp_cpu_offline(unsigned int cpu)
 	mutex_lock(&kwatch_all_wp_mutex);
 	list_for_each_entry(wp, &kwatch_all_wp_list, list) {
 		bp = per_cpu(*wp->event, cpu);
-		if (bp)
+		if (bp) {
 			unregister_hw_breakpoint(bp);
+			per_cpu(*wp->event, cpu) = NULL;
+		}
 	}
 	mutex_unlock(&kwatch_all_wp_mutex);
 	return 0;
