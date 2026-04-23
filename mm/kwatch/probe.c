@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <linux/compiler.h>
 #include <linux/kprobes.h>
 #include <linux/fprobe.h>
+#include <linux/preempt.h>
 #include <linux/rethook.h>
 #include <linux/sched.h>
 
@@ -85,6 +87,9 @@ static int kwatch_lifecycle_entry(struct kretprobe_instance *ri,
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
 	unsigned long stack_pointer = kernel_stack_pointer(regs);
 
+	if (unlikely(in_nmi()))
+		return 0;
+
 	if (ctx->wp && ctx->sp == stack_pointer)
 		return 0;
 
@@ -99,6 +104,9 @@ static int kwatch_lifecycle_exit(struct kretprobe_instance *ri,
 				 struct pt_regs *regs)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
+
+	if (unlikely(in_nmi()))
+		return 0;
 
 	if (kwatch_tsk_ctx_check(false)) {
 		if (ctx->wp) {
@@ -120,10 +128,14 @@ static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 	unsigned long watch_addr;
 	u16 watch_len;
 
+	if (unlikely(in_nmi()))
+		return 0;
+
 	if (ctx->depth != kwatch_probe_ctx.cfg->depth + 1 || ctx->wp)
 		return 0;
 
-	if (kwatch_deref_resolve(kwatch_probe_ctx.cfg, regs, &watch_addr, &watch_len))
+	if (kwatch_deref_resolve(kwatch_probe_ctx.cfg, regs, &watch_addr,
+				 &watch_len))
 		return 0;
 
 	if (kwatch_hwbp_get(&ctx->wp))
