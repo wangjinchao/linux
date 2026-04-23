@@ -154,9 +154,9 @@ int kwatch_hwbp_get(struct kwatch_watchpoint **out_wp)
 void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
 		     enum kwatch_access_type type)
 {
-	int cur_cpu = raw_smp_processor_id();
+	int cur_cpu;
 	call_single_data_t *csd;
-	int cpu, target_count = 0;
+	int cpu;
 	bool is_disarm = (addr == (unsigned long)&kwatch_dummy_holder);
 
 	wp->attr.bp_addr = addr;
@@ -166,18 +166,17 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
 			   (type == KWATCH_ACCESS_RW) ? HW_BREAKPOINT_RW :
 							HW_BREAKPOINT_W;
 
-	if (is_disarm) {
-		for_each_online_cpu(cpu)
-			target_count++;
-		atomic_set(&wp->pending_ipis, target_count);
-	}
-
+	atomic_set(&wp->pending_ipis, 0);
+	cur_cpu = get_cpu();
 	for_each_online_cpu(cpu) {
 		if (cpu == cur_cpu)
 			continue;
+
+		if (is_disarm)
+			atomic_inc(&wp->pending_ipis);
+
 		csd = per_cpu_ptr(is_disarm ? wp->csd_disarm : wp->csd_arm,
 				  cpu);
-
 		if (smp_call_function_single_async(cpu, csd) && is_disarm)
 			kwatch_hwbp_try_recycle(wp);
 	}
@@ -186,6 +185,8 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len,
 		kwatch_hwbp_disarm_local(wp);
 	else
 		kwatch_hwbp_arm_local(wp);
+
+	put_cpu();
 }
 
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
