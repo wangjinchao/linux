@@ -64,91 +64,73 @@ static void kwatch_stop_watching(void)
 
 static int parse_deref_chain(struct kwatch_config *cfg, char *val)
 {
-	char *p = val;
-	char *base_str = p;
-	char *offset_str = NULL;
-	bool has_arrow = false;
+	char *p, *sep, *next;
+	char type;
 
-	/* 1. Find the boundary of the base string */
-	while (*p) {
-		if (*p == ':') {
-			*p = '\0';
-			offset_str = p + 1;
-			break;
-		} else if (!strncmp(p, "->", 2)) {
-			*p = '\0';
-			offset_str = p + 2;
-			has_arrow = true;
-			break;
-		}
-		p++;
+	cfg->offset_count = 1;
+	cfg->offsets[0] = 0;
+
+	/* 1. Isolate and Resolve Base Anchor */
+	sep = strpbrk(val, ":-");
+	type = sep ? *sep : '\0';
+
+	if (sep) {
+		/* Strictly enforce '->' syntax to avoid misinterpreting '-' */
+		if (type == '-' && sep[1] != '>')
+			return -EINVAL;
+		*sep = '\0';
 	}
 
-	/* 2. Parse the Base Anchor (Unified Logic) */
-	if (!strcmp(base_str, "stack")) {
+	if (!strcmp(val, "stack")) {
 		cfg->base = KWATCH_BASE_STACK;
-	} else if (!strncmp(base_str, "arg", 3) && strlen(base_str) == 4) {
+	} else if (!strncmp(val, "arg", 3) && strlen(val) == 4) {
 		int arg_num;
-
-		if (kstrtoint(base_str + 3, 10, &arg_num) || arg_num < 1 ||
+		if (kstrtoint(val + 3, 10, &arg_num) || arg_num < 1 ||
 		    arg_num > 6)
 			return -EINVAL;
 		cfg->base = KWATCH_BASE_ARG1 + (arg_num - 1);
 	} else {
-		/* Fallback: Treat as a global symbol */
 		cfg->base = KWATCH_BASE_GLOBAL_SYM;
-
-		strscpy(cfg->sym_name, base_str, sizeof(cfg->sym_name));
-
-		cfg->sym_addr = kallsyms_lookup_name(base_str);
-		if (!cfg->sym_addr) {
-			pr_err("KWatch: Base anchor '%s' is not stack, argN, or a valid symbol\n",
-			       base_str);
+		strscpy(cfg->sym_name, val, sizeof(cfg->sym_name));
+		cfg->sym_addr = kallsyms_lookup_name(val);
+		if (!cfg->sym_addr)
 			return -EINVAL;
-		}
 	}
 
-	/* 3. Parse the bound :offset (handling implicit 0) */
-	if (has_arrow) {
-		/* Syntax: base->... (implicitly includes :0) */
-		cfg->offsets[cfg->offset_count++] = 0;
-		p = offset_str;
-	} else if (offset_str) {
-		/* Syntax: base:offset... */
-		p = offset_str;
-		char *next_arrow = strstr(p, "->");
-
-		if (next_arrow)
-			*next_arrow = '\0';
-
-		if (*p == '\0')
-			cfg->offsets[cfg->offset_count++] = 0;
-		else if (kstrtol(p, 0, &cfg->offsets[cfg->offset_count++]))
-			return -EINVAL;
-
-		p = next_arrow ? next_arrow + 2 : NULL;
-	} else {
-		/* Syntax: base (no offsets, no dereferences) */
-		cfg->offsets[cfg->offset_count++] = 0;
+	if (!sep)
 		return 0;
+
+	/* 2. Resolve Base Offset (if ':' exists) */
+	if (type == ':') {
+		p = sep + 1;
+		next = strstr(p, "->");
+		if (next)
+			*next = '\0';
+
+		if (*p && kstrtol(p, 0, &cfg->offsets[0]))
+			return -EINVAL;
+
+		p = next ? next + 2 : NULL;
+	} else {
+		/* Jump directly to the first dereference after '->' */
+		p = sep + 2;
 	}
 
-	/* 4. Parse all subsequent ->offset dereferences */
+	/* 3. Resolve Dereference Chain */
 	while (p) {
-		char *next_arrow = strstr(p, "->");
-
 		if (cfg->offset_count >= MAX_DEREF_CHAIN)
 			return -E2BIG;
 
-		if (next_arrow)
-			*next_arrow = '\0';
+		next = strstr(p, "->");
+		if (next)
+			*next = '\0';
 
-		if (*p == '\0')
-			cfg->offsets[cfg->offset_count++] = 0;
-		else if (kstrtol(p, 0, &cfg->offsets[cfg->offset_count++]))
+		if (*p && kstrtol(p, 0, &cfg->offsets[cfg->offset_count++]))
 			return -EINVAL;
+		else if (!*p)
+			cfg->offsets[cfg->offset_count++] = 0;
 
-		p = next_arrow ? next_arrow + 2 : NULL;
+		p = next ? next + 2 : NULL;
 	}
 
 	return 0;
