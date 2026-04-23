@@ -16,7 +16,7 @@
 static LLIST_HEAD(kwatch_free_wp_list);
 static LIST_HEAD(kwatch_all_wp_list);
 static DEFINE_MUTEX(kwatch_all_wp_mutex);
-static unsigned long kwatch_dummy_holder;
+static unsigned long kwatch_dummy_holder __aligned(8);
 #define TRAMPOLINE_CHECK_DEPTH 16
 
 static void kwatch_hwbp_handler(struct perf_event *bp,
