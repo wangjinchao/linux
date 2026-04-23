@@ -170,6 +170,9 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len)
 	wp->attr.bp_addr = addr;
 	wp->attr.bp_len = len;
 
+	/* ensure attr update visible to other cpu before sending IPI */
+	smp_wmb();
+
 	atomic_set(&wp->pending_ipis, 1);
 	cur_cpu = get_cpu();
 	for_each_online_cpu(cpu) {
