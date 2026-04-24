@@ -153,7 +153,7 @@ static int kwatch_lifecycle_entry(struct kretprobe_instance *ri,
 	if (unlikely(in_nmi()))
 		return 0;
 
-	if (!kwatch_tsk_ctx_check(true))
+	if (!kwatch_tsk_ctx_check(KWATCH_PROBE_POSITION_ENTRY))
 		return 0;
 
 	if (kwatch_probe_ctx.cfg->func_offset == 0)
@@ -170,7 +170,7 @@ static int kwatch_lifecycle_exit(struct kretprobe_instance *ri,
 	if (unlikely(in_nmi()))
 		return 0;
 
-	if (!kwatch_tsk_ctx_check(false))
+	if (!kwatch_tsk_ctx_check(KWATCH_PROBE_POSITION_EXIT))
 		return 0;
 
 	if (ctx->depth == kwatch_probe_ctx.cfg->depth && ctx->wp) {
