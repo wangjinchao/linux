@@ -20,6 +20,8 @@ struct kwatch_watchpoint {
 	struct llist_node node; // for atomic get/put
 	struct list_head list; // for cpu online and offline
 
+	struct task_struct *arm_tsk;
+
 	/* Async disarm State */
 	struct work_struct destroy_work;
 	atomic_t pending_ipis;
@@ -71,7 +73,7 @@ int kwatch_probe_start(struct kwatch_config *cfg, unsigned long func_start,
 		       unsigned long func_end);
 void kwatch_probe_stop(void);
 void kwatch_probe_mute(bool mute);
-bool kwatch_probe_validate_hit(struct pt_regs *regs);
+bool kwatch_probe_validate_hit(struct pt_regs *regs, struct task_struct *arm_tsk);
 
 void kwatch_tsk_ctx_reset(void);
 bool kwatch_is_handler(struct perf_event *event);

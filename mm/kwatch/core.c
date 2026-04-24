@@ -89,6 +89,7 @@ static int parse_deref_chain(struct kwatch_config *cfg, char *val)
 		cfg->base = KWATCH_BASE_STACK;
 	} else if (!strncmp(val, "arg", 3) && strlen(val) == 4) {
 		int arg_num;
+
 		if (kstrtoint(val + 3, 10, &arg_num) || arg_num < 1 ||
 		    arg_num > 6)
 			return -EINVAL;

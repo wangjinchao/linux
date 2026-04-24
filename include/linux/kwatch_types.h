@@ -6,7 +6,6 @@
 struct kwatch_watchpoint;
 struct kwatch_tsk_ctx {
 	struct kwatch_watchpoint *wp;
-	ulong sp;
 	u16 depth;
 	u32 epoch;
 };

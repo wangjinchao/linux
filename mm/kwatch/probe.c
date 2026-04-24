@@ -36,17 +36,19 @@ static bool kwatch_probe_in_trampoline(unsigned long ip)
 	return false;
 }
 
-bool kwatch_probe_validate_hit(struct pt_regs *regs)
+bool kwatch_probe_validate_hit(struct pt_regs *regs,
+			       struct task_struct *arm_tsk)
 {
 	struct kwatch_tsk_ctx *ctx = &current->kwatch_tsk_ctx;
-	unsigned long sp = kernel_stack_pointer(regs);
 	unsigned long ip = instruction_pointer(regs);
 	unsigned long entries[TRAMPOLINE_CHECK_DEPTH];
 	int i, nr;
 
-	if (ctx->sp && sp == ctx->sp && ip >= kwatch_probe_ctx.func_start &&
-	    ip < kwatch_probe_ctx.func_end)
-		return false;
+	if (arm_tsk != current ||
+	    ctx->depth != kwatch_probe_ctx.cfg->depth + 1 ||
+	    ip < kwatch_probe_ctx.func_start ||
+	    ip >= kwatch_probe_ctx.func_end)
+		return true;
 
 	nr = stack_trace_save_regs(regs, entries, TRAMPOLINE_CHECK_DEPTH, 0);
 	for (i = 0; i < nr; i++) {
@@ -76,7 +78,6 @@ void kwatch_tsk_ctx_reset(void)
 		ctx->wp = NULL;
 	}
 	ctx->depth = 0;
-	ctx->sp = 0;
 }
 
 enum kwatch_probe_position {
@@ -142,8 +143,6 @@ static int kwatch_activate_handler(struct kprobe *p, struct pt_regs *regs)
 	if (kwatch_hwbp_get(&ctx->wp))
 		return 0;
 
-	ctx->sp = kernel_stack_pointer(regs);
-
 	kwatch_hwbp_arm(ctx->wp, watch_addr, watch_len);
 	return 0;
 }
@@ -177,7 +176,6 @@ static int kwatch_lifecycle_exit(struct kretprobe_instance *ri,
 	if (ctx->depth == kwatch_probe_ctx.cfg->depth && ctx->wp) {
 		kwatch_hwbp_put(ctx->wp);
 		ctx->wp = NULL;
-		ctx->sp = 0;
 	}
 
 	return 0;

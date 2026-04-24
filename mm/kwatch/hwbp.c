@@ -23,7 +23,9 @@ static void kwatch_hwbp_handler(struct perf_event *bp,
 				struct perf_sample_data *data,
 				struct pt_regs *regs)
 {
-	if (!kwatch_probe_validate_hit(regs))
+	struct kwatch_watchpoint *wp = bp->overflow_handler_context;
+
+	if (!kwatch_probe_validate_hit(regs, wp->arm_tsk))
 		return;
 
 	pr_warn("========== KWatch Fired =======\n");
@@ -159,6 +161,9 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len)
 	wp->attr.bp_addr = addr;
 	wp->attr.bp_len = len;
 
+	if (!is_disarm)
+		wp->arm_tsk = current;
+
 	/* ensure attr update visible to other cpu before sending IPI */
 	smp_wmb();
 
@@ -176,13 +181,12 @@ void kwatch_hwbp_arm(struct kwatch_watchpoint *wp, unsigned long addr, u16 len)
 		if (smp_call_function_single_async(cpu, csd) && is_disarm)
 			kwatch_hwbp_try_recycle(wp);
 	}
+	put_cpu();
 
 	if (is_disarm)
 		kwatch_hwbp_disarm_local(wp);
 	else
 		kwatch_hwbp_arm_local(wp);
-
-	put_cpu();
 }
 
 int kwatch_hwbp_put(struct kwatch_watchpoint *wp)
