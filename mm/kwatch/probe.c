@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/kprobes.h>
 #include <linux/kallsyms.h>
 #include <linux/percpu.h>
