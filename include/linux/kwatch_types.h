@@ -1,0 +1,13 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _LINUX_KWATCH_TYPES_H
+#define _LINUX_KWATCH_TYPES_H
+#include <linux/types.h>
+
+struct kwatch_watchpoint;
+struct kwatch_tsk_ctx {
+	struct kwatch_watchpoint *wp;
+	u16 depth;
+	u32 epoch;
+};
+
+#endif /* _LINUX_KWATCH_TYPES_H */
