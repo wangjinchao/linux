@@ -18,6 +18,7 @@
 #define DR7_FIXED_1	0x00000400
 
 DECLARE_PER_CPU(unsigned long, cpu_dr7);
+DECLARE_PER_CPU(unsigned int, cpu_dr7_seq);
 
 #ifndef CONFIG_PARAVIRT_XXL
 /*
@@ -125,40 +126,66 @@ static __always_inline bool hw_breakpoint_active(void)
 
 extern void hw_breakpoint_restore(void);
 
-static __always_inline unsigned long local_db_save(void)
+static __always_inline void local_db_save(unsigned long *dr7,
+					  unsigned int *dr7_seq)
 {
-	unsigned long dr7;
+	do {
+		*dr7_seq = this_cpu_read(cpu_dr7_seq);
+		*dr7 = 0;
 
-	if (cpu_feature_enabled(X86_FEATURE_HYPERVISOR) && !hw_breakpoint_active())
-		return 0;
+		if (cpu_feature_enabled(X86_FEATURE_HYPERVISOR) &&
+		    !hw_breakpoint_active())
+			return;
 
-	get_debugreg(dr7, 7);
+		get_debugreg(*dr7, 7);
 
-	/* Architecturally set bit */
-	dr7 &= ~DR7_FIXED_1;
-	if (dr7)
-		set_debugreg(DR7_FIXED_1, 7);
+		/* Architecturally set bit */
+		*dr7 &= ~DR7_FIXED_1;
+		if (*dr7)
+			set_debugreg(DR7_FIXED_1, 7);
 
-	/*
-	 * Ensure the compiler doesn't lower the above statements into
-	 * the critical section; disabling breakpoints late would not
-	 * be good.
-	 */
-	barrier();
-
-	return dr7;
+		/*
+		 * Ensure the compiler doesn't lower the above statements into
+		 * the critical section; disabling breakpoints late would not
+		 * be good.
+		 */
+		barrier();
+	} while (unlikely(*dr7_seq != this_cpu_read(cpu_dr7_seq)));
 }
 
-static __always_inline void local_db_restore(unsigned long dr7)
+static __always_inline void local_db_restore(unsigned long dr7,
+					     unsigned int dr7_seq)
 {
+	unsigned long val;
+	unsigned int seq;
+
 	/*
 	 * Ensure the compiler doesn't raise this statement into
 	 * the critical section; enabling breakpoints early would
 	 * not be good.
 	 */
 	barrier();
-	if (dr7)
-		set_debugreg(dr7, 7);
+
+	do {
+		seq = this_cpu_read(cpu_dr7_seq);
+		if (seq == dr7_seq) {
+			if (!dr7)
+				return;
+			val = dr7;
+		} else {
+			/*
+			 * If an NMI modified breakpoints while DR7 was saved as 0
+			 * (e.g. KVM guest entry), arch_install_hw_breakpoint()
+			 * clobbered hardware DR7. Restore val = 0 (DR7_FIXED_1)
+			 * to clean up the NMI's write and preserve guest isolation.
+			 * Otherwise, load the latest cpu_dr7 state.
+			 */
+			val = dr7 ? this_cpu_read(cpu_dr7) : 0;
+		}
+
+		set_debugreg(val | DR7_FIXED_1, 7);
+		barrier();
+	} while (unlikely(seq != this_cpu_read(cpu_dr7_seq)));
 }
 
 #ifdef CONFIG_CPU_SUP_AMD
