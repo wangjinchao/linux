@@ -20,7 +20,6 @@
 #include <linux/spinlock.h>
 #include <linux/tracepoint.h>
 #include <linux/uaccess.h>
-#include <linux/workqueue.h>
 #include <linux/irq_work.h>
 #include <linux/preempt.h>
 
@@ -51,25 +50,25 @@ static struct dyn_event_operations trace_wprobe_ops = {
 	.match = trace_wprobe_match,
 };
 
+struct trace_wprobe;
+
+/* Per-CPU request to re-point that CPU's breakpoint to the current address. */
+struct wprobe_cpu_update {
+	struct irq_work		work;
+	struct trace_wprobe	*tw;
+};
+
 struct trace_wprobe {
 	struct dyn_event	devent;
 	struct perf_event * __percpu *bp_event;
+	struct wprobe_cpu_update __percpu *update;
 	unsigned long		addr;
 	int			offset;
 	int			len;
 	int			type;
 	const char		*symbol;
 	raw_spinlock_t		lock;
-	struct irq_work		irq_work;
-	struct work_struct	work;
 	atomic_t		missed;
-	/*
-	 * work_pending is set to 1 before irq_work_queue() and cleared to 0
-	 * after wprobe_work_func() finishes on_each_cpu(). This prevents a
-	 * new trigger from overwriting tw->addr while the work is propagating
-	 * the old address to per-CPU debug registers via IPI.
-	 */
-	atomic_t		work_pending;
 	struct trace_probe	tp;
 };
 
@@ -185,6 +184,15 @@ static void wprobe_perf_handler(struct perf_event *bp,
 		wprobe_trace_handler(tw, addr, regs, link->file);
 }
 
+/* Wait for the update requests in flight, they may still use tw->bp_event. */
+static void wprobe_sync_updates(struct trace_wprobe *tw)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		irq_work_sync(&per_cpu_ptr(tw->update, cpu)->work);
+}
+
 static int __register_trace_wprobe(struct trace_wprobe *tw)
 {
 	struct perf_event * __percpu *bp_event;
@@ -232,8 +240,7 @@ static void __unregister_trace_wprobe(struct trace_wprobe *tw)
 	if (!bp_event)
 		return;
 
-	irq_work_sync(&tw->irq_work);
-	cancel_work_sync(&tw->work);
+	wprobe_sync_updates(tw);
 	unregister_wide_hw_breakpoint(bp_event);
 }
 
@@ -242,7 +249,7 @@ static int trace_wprobe_update_local(struct trace_wprobe *tw, unsigned long addr
 	struct perf_event * __percpu *pevent;
 	struct perf_event *bp;
 
-	pevent = tw->bp_event;
+	pevent = READ_ONCE(tw->bp_event);
 	if (!pevent)
 		return -EINVAL;
 
@@ -253,41 +260,41 @@ static int trace_wprobe_update_local(struct trace_wprobe *tw, unsigned long addr
 	return modify_local_hw_breakpoint_addr(bp, addr);
 }
 
-static void wprobe_smp_update_func(void *info)
+/* Runs on a CPU asked to catch up, in hard interrupt context. */
+static void wprobe_update_work_func(struct irq_work *work)
 {
-	struct trace_wprobe *tw = info;
-	unsigned long addr = READ_ONCE(tw->addr);
+	struct wprobe_cpu_update *update = container_of(work, struct wprobe_cpu_update, work);
+	struct trace_wprobe *tw = update->tw;
 
-	if (trace_wprobe_update_local(tw, addr))
+	if (trace_wprobe_update_local(tw, READ_ONCE(tw->addr)))
 		atomic_inc(&tw->missed);
 }
 
-static void wprobe_work_func(struct work_struct *work)
+/*
+ * Ask the other CPUs to re-point their breakpoint to tw->addr. Called with
+ * interrupts disabled, so no CPU can complete going offline meanwhile.
+ *
+ * No bookkeeping is needed for requests already in flight: a request that
+ * is still pending reads the address when it runs, and one queued while its
+ * function executes runs it again (irq_work_single() clears the pending bit
+ * before the call), so every CPU ends up on the latest address.
+ */
+static void wprobe_update_remote_cpus(struct trace_wprobe *tw)
 {
-	struct trace_wprobe *tw = container_of(work, struct trace_wprobe, work);
+	int cpu, this_cpu = smp_processor_id();
 
-	on_each_cpu(wprobe_smp_update_func, tw, true);
-	/*
-	 * Clear work_pending after all CPUs have updated their local debug
-	 * registers.  A new trigger may now update tw->addr and queue a new
-	 * irq_work.
-	 */
-	atomic_set(&tw->work_pending, 0);
-}
-
-static void wprobe_irq_work_func(struct irq_work *irq_work)
-{
-	struct trace_wprobe *tw = container_of(irq_work, struct trace_wprobe, irq_work);
-
-	schedule_work(&tw->work);
+	for_each_online_cpu(cpu) {
+		if (cpu != this_cpu)
+			irq_work_queue_on(&per_cpu_ptr(tw->update, cpu)->work, cpu);
+	}
 }
 
 static void free_trace_wprobe(struct trace_wprobe *tw)
 {
 	if (tw) {
-		if (tw->work.func) {
-			irq_work_sync(&tw->irq_work);
-			cancel_work_sync(&tw->work);
+		if (tw->update) {
+			wprobe_sync_updates(tw);
+			free_percpu(tw->update);
 		}
 		trace_probe_cleanup(&tw->tp);
 		kfree(tw->symbol);
@@ -307,17 +314,24 @@ static struct trace_wprobe *alloc_trace_wprobe(const char *group,
 					       int len, int type, int nargs)
 {
 	struct trace_wprobe *tw __free(free_trace_wprobe) = NULL;
-	int ret;
+	int ret, cpu;
 
 	tw = kzalloc_flex(*tw, tp.args, nargs);
 	if (!tw)
 		return ERR_PTR(-ENOMEM);
 
 	raw_spin_lock_init(&tw->lock);
-	init_irq_work(&tw->irq_work, wprobe_irq_work_func);
-	INIT_WORK(&tw->work, wprobe_work_func);
 	atomic_set(&tw->missed, 0);
-	atomic_set(&tw->work_pending, 0);
+
+	tw->update = alloc_percpu(struct wprobe_cpu_update);
+	if (!tw->update)
+		return ERR_PTR(-ENOMEM);
+	for_each_possible_cpu(cpu) {
+		struct wprobe_cpu_update *update = per_cpu_ptr(tw->update, cpu);
+
+		update->work = IRQ_WORK_INIT_HARD(wprobe_update_work_func);
+		update->tw = tw;
+	}
 
 	if (symbol) {
 		tw->symbol = kstrdup(symbol, GFP_KERNEL);
@@ -921,22 +935,12 @@ static void wprobe_trigger(struct event_trigger_data *data,
 			goto out;
 		}
 		if (tw->addr == WPROBE_DEFAULT_CLEAR_ADDRESS) {
-			/* Skip if a previous work is still propagating the address */
-			if (atomic_read(&tw->work_pending)) {
-				atomic_inc(&tw->missed);
-				goto out;
-			}
 			WRITE_ONCE(tw->addr, addr);
 			changed = true;
 			clear_bit(EVENT_FILE_FL_SOFT_DISABLED_BIT, &wprobe_data->file->flags);
 		}
 	} else {
 		if (tw->addr != WPROBE_DEFAULT_CLEAR_ADDRESS) {
-			/* Skip if a previous work is still propagating the address */
-			if (atomic_read(&tw->work_pending)) {
-				atomic_inc(&tw->missed);
-				goto out;
-			}
 			if (!wprobe_data->field || tw->addr == addr) {
 				WRITE_ONCE(tw->addr, WPROBE_DEFAULT_CLEAR_ADDRESS);
 				changed = true;
@@ -945,20 +949,14 @@ static void wprobe_trigger(struct event_trigger_data *data,
 		}
 	}
 
-	if (changed) {
+	if (changed && tw->bp_event) {
 		/*
 		 * The window opens or closes on this CPU first: re-point the
-		 * local breakpoint right away, the work updates the others.
+		 * local breakpoint right away, then ask the others.
 		 */
-		if (tw->bp_event && trace_wprobe_update_local(tw, tw->addr))
+		if (trace_wprobe_update_local(tw, tw->addr))
 			atomic_inc(&tw->missed);
-		/*
-		 * Mark the work as pending before queuing irq_work so that
-		 * subsequent triggers skip updating tw->addr until the work
-		 * has finished propagating the address to all CPUs.
-		 */
-		atomic_set(&tw->work_pending, 1);
-		irq_work_queue(&tw->irq_work);
+		wprobe_update_remote_cpus(tw);
 	}
 
 out:
