@@ -93,8 +93,8 @@ Combination with trigger action
 -------------------------------
 The event trigger action can extend the utilization of this wprobe.
 
-- set_wprobe:WPEVENT:FIELD[+|-ADJUST][:COUNT]
-- set_wprobe:WPEVENT:(STRUCT[,ASGN])EVENT_FIELD->MEMBER[+|-ADJUST][:COUNT]
+- set_wprobe:WPEVENT:FIELD[+|-ADJUST][:timeout=TIME][:COUNT]
+- set_wprobe:WPEVENT:(STRUCT[,ASGN])EVENT_FIELD->MEMBER[+|-ADJUST][:timeout=TIME][:COUNT]
 - clear_wprobe:WPEVENT[:FIELD[+|-ADJUST][:COUNT]]
 - clear_wprobe:WPEVENT[:(STRUCT[,ASGN])EVENT_FIELD->MEMBER[+|-ADJUST][:COUNT]]
 
@@ -110,6 +110,18 @@ forcibly cleared. If FIELD[+|-ADJUST] is set, it clears WPEVENT only
 if its watching address is the same as the FIELD[+|-ADJUST] value.
 If COUNT is specified, it will set/clear WPEVENT only if it hits COUNT
 times.
+If timeout=TIME is specified on set_wprobe, the address is watched for at
+most TIME (a number of milliseconds, optionally with an "ms" suffix, or of
+seconds with an "s" suffix) and then released as if a clear_wprobe had hit,
+counted as ``expired`` in the trigger file. Expiry is checked periodically,
+every half of the shortest timeout set on the event (at least one jiffy) by
+a deferrable timer, so a window may outlive its TIME by up to that much,
+more on an idle CPU. A watch window normally ends with the clear_wprobe
+trigger, but that clear may never come: the event carrying it can be
+missed (a %return fprobe event needs room on the per-task shadow stack, and
+NMI context is skipped), the task may die inside the window, or the object
+may be released on a path without a trigger. The timeout bounds how long
+such a window keeps a watchpoint busy.
 
 Notes:
 - set_wprobe watches the FIELD[+|-ADJUST] address with one of the SLOTS
@@ -127,6 +139,9 @@ Notes:
   so fewer than SLOTS may be available: the event is enabled with what
   could be reserved, at least one, and the trigger file shows
   ``slots: available/requested``.
+- Removing the last set_wprobe trigger of WPEVENT closes all its windows:
+  nothing could close them afterwards, and the event must be able to go
+  away with its triggers.
 
 The trigger file shows the counters below as a trailing comment when they
 are not zero. ``missed`` counts the trigger invocations that could not

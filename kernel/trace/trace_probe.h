@@ -647,6 +647,8 @@ extern int traceprobe_define_arg_fields(struct trace_event_call *event_call,
 	C(WPROBE_NOT_FOUND,	"Target wprobe event is not found"),		\
 	C(WPROBE_BUSY,		"Target wprobe event is already enabled"),	\
 	C(WPROBE_NEED_FIELD,	"Wprobe trigger requires a target field"),	\
+	C(WPROBE_BAD_TIMEOUT,	"Invalid timeout"),				\
+	C(WPROBE_TIMEOUT_ON_CLEAR, "Timeout is only for set_wprobe"),		\
 	C(WPROBE_BAD_FIELD,	"Target field must be pointer size"),
 
 #undef C

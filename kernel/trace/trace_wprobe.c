@@ -11,6 +11,7 @@
 #include <linux/ctype.h>
 #include <linux/errno.h>
 #include <linux/hw_breakpoint.h>
+#include <linux/jiffies.h>
 #include <linux/kallsyms.h>
 #include <linux/list.h>
 #include <linux/module.h>
@@ -20,6 +21,7 @@
 #include <linux/sched/clock.h>
 #include <linux/security.h>
 #include <linux/spinlock.h>
+#include <linux/timer.h>
 #include <linux/tracepoint.h>
 #include <linux/uaccess.h>
 #include <linux/irq_work.h>
@@ -69,6 +71,10 @@ struct wprobe_slot {
 	unsigned long		addr;
 	/* When a trigger armed it, for eviction. */
 	u64			armed_at;
+	/* When it is closed if no clear comes (jiffies), 0 for never. */
+	unsigned long		expires;
+	/* The wprobe event file to soft-disable, set by the arming trigger. */
+	struct trace_event_file	*file;
 };
 
 struct trace_wprobe {
@@ -83,11 +89,37 @@ struct trace_wprobe {
 	int			type;
 	const char		*symbol;
 	raw_spinlock_t		lock;
+	struct timer_list	expire_timer;
+	/* Registered set triggers, and those with a timeout. */
+	unsigned int		nr_set;
+	unsigned int		nr_timeouts;
+	unsigned long		expire_period;	/* how often to check for expiry */
 	atomic_t		missed;
 	atomic_t		ipi_suppressed;
 	atomic_t		evicted;
+	atomic_t		expired;
 	struct trace_probe	tp;
 };
+
+#ifdef CONFIG_WPROBE_TRIGGERS
+static void wprobe_expire_timer_func(struct timer_list *t);
+static void wprobe_timer_kick(struct trace_wprobe *tw);
+
+/* Deferrable: expiring a window late on an idle CPU costs nothing. */
+static inline void wprobe_timer_setup(struct trace_wprobe *tw)
+{
+	timer_setup(&tw->expire_timer, wprobe_expire_timer_func, TIMER_DEFERRABLE);
+}
+
+static inline void wprobe_timer_stop(struct trace_wprobe *tw)
+{
+	timer_delete_sync(&tw->expire_timer);
+}
+#else
+static inline void wprobe_timer_setup(struct trace_wprobe *tw) { }
+static inline void wprobe_timer_stop(struct trace_wprobe *tw) { }
+static inline void wprobe_timer_kick(struct trace_wprobe *tw) { }
+#endif
 
 static bool is_trace_wprobe(struct dyn_event *ev)
 {
@@ -242,6 +274,8 @@ static int __register_trace_wprobe(struct trace_wprobe *tw)
 
 		slot->addr = tw->addr;
 		slot->armed_at = 0;
+		slot->expires = 0;
+		slot->file = NULL;
 		attr.bp_addr = slot->addr;
 		bp_event = register_wide_hw_breakpoint(&attr, wprobe_perf_handler, slot);
 		if (IS_ERR_PCPU(bp_event)) {
@@ -259,6 +293,7 @@ static int __register_trace_wprobe(struct trace_wprobe *tw)
 	raw_spin_lock_irqsave(&tw->lock, flags);
 	tw->nr_slots = i;
 	raw_spin_unlock_irqrestore(&tw->lock, flags);
+	wprobe_timer_kick(tw);
 
 	return 0;
 }
@@ -277,6 +312,7 @@ static void __unregister_trace_wprobe(struct trace_wprobe *tw)
 	if (!nr)
 		return;
 
+	wprobe_timer_stop(tw);
 	wprobe_sync_updates(tw);
 	for (i = 0; i < nr; i++) {
 		unregister_wide_hw_breakpoint(tw->slots[i].bp_event);
@@ -317,6 +353,7 @@ static void wprobe_update_work_func(struct irq_work *work)
 static void free_trace_wprobe(struct trace_wprobe *tw)
 {
 	if (tw) {
+		wprobe_timer_stop(tw);
 		if (tw->update) {
 			wprobe_sync_updates(tw);
 			free_percpu(tw->update);
@@ -349,9 +386,11 @@ static struct trace_wprobe *alloc_trace_wprobe(const char *group,
 		return ERR_PTR(-ENOMEM);
 
 	raw_spin_lock_init(&tw->lock);
+	wprobe_timer_setup(tw);
 	atomic_set(&tw->missed, 0);
 	atomic_set(&tw->ipi_suppressed, 0);
 	atomic_set(&tw->evicted, 0);
+	atomic_set(&tw->expired, 0);
 
 	tw->update = alloc_percpu(struct wprobe_cpu_update);
 	if (!tw->update)
@@ -964,6 +1003,9 @@ struct wprobe_trigger_data {
 	long			adjust;
 	const char		*field;
 	bool			clear;
+	bool			registered;
+	/* Close the window after this many jiffies, 0 for never. */
+	unsigned long		timeout;
 };
 
 /* Minimum spacing between the broadcasts that arm a window, per source CPU. */
@@ -1041,6 +1083,78 @@ static bool wprobe_is_armed(struct trace_wprobe *tw)
 	return false;
 }
 
+/*
+ * The expiry scan runs periodically while the event is enabled and one of
+ * its set triggers has a timeout, so that the trigger itself never touches
+ * the timer: arming a window only stamps its deadline.
+ */
+static void wprobe_timer_kick(struct trace_wprobe *tw)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&tw->lock, flags);
+	if (tw->nr_timeouts && tw->nr_slots)
+		mod_timer(&tw->expire_timer, jiffies + tw->expire_period);
+	raw_spin_unlock_irqrestore(&tw->lock, flags);
+}
+
+/* A set trigger with a timeout is added. */
+static void wprobe_timeout_get(struct trace_wprobe *tw, unsigned long timeout)
+{
+	unsigned long flags, period = max(timeout / 2, 1UL);
+
+	raw_spin_lock_irqsave(&tw->lock, flags);
+	if (!tw->nr_timeouts++ || period < tw->expire_period)
+		tw->expire_period = period;
+	raw_spin_unlock_irqrestore(&tw->lock, flags);
+	wprobe_timer_kick(tw);
+}
+
+/* A set trigger with a timeout is removed. */
+static void wprobe_timeout_put(struct trace_wprobe *tw)
+{
+	unsigned long flags;
+	bool last;
+
+	raw_spin_lock_irqsave(&tw->lock, flags);
+	last = !--tw->nr_timeouts;
+	raw_spin_unlock_irqrestore(&tw->lock, flags);
+	if (last)
+		wprobe_timer_stop(tw);
+}
+
+/* Close the windows whose clear never came. */
+static void wprobe_expire_timer_func(struct timer_list *t)
+{
+	struct trace_wprobe *tw = timer_container_of(tw, t, expire_timer);
+	bool changed = false;
+	unsigned long flags;
+	unsigned int i;
+
+	raw_spin_lock_irqsave(&tw->lock, flags);
+	for (i = 0; i < tw->nr_slots; i++) {
+		struct wprobe_slot *slot = &tw->slots[i];
+
+		if (slot->addr == WPROBE_DEFAULT_CLEAR_ADDRESS || !slot->expires ||
+		    time_before(jiffies, slot->expires))
+			continue;
+		WRITE_ONCE(slot->addr, WPROBE_DEFAULT_CLEAR_ADDRESS);
+		slot->expires = 0;
+		atomic_inc(&tw->expired);
+		if (slot->file && !wprobe_is_armed(tw))
+			set_bit(EVENT_FILE_FL_SOFT_DISABLED_BIT, &slot->file->flags);
+		changed = true;
+	}
+	if (changed) {
+		wprobe_update_local_cpu(tw);
+		wprobe_update_remote_cpus(tw, false);
+	}
+	/* Stops on its own once the triggers or the slots are gone. */
+	if (tw->nr_timeouts && tw->nr_slots)
+		mod_timer(&tw->expire_timer, jiffies + tw->expire_period);
+	raw_spin_unlock_irqrestore(&tw->lock, flags);
+}
+
 static void wprobe_trigger(struct event_trigger_data *data,
 			   struct trace_buffer *buffer,  void *rec,
 			   struct ring_buffer_event *event)
@@ -1085,6 +1199,8 @@ static void wprobe_trigger(struct event_trigger_data *data,
 		}
 		WRITE_ONCE(slot->addr, addr);
 		slot->armed_at = local_clock();
+		slot->file = wprobe_data->file;
+		slot->expires = wprobe_data->timeout ? jiffies + wprobe_data->timeout : 0;
 		changed = true;
 		clear_bit(EVENT_FILE_FL_SOFT_DISABLED_BIT, &wprobe_data->file->flags);
 	} else {
@@ -1092,6 +1208,7 @@ static void wprobe_trigger(struct event_trigger_data *data,
 			slot = wprobe_find_slot(tw, addr);
 			if (slot) {
 				WRITE_ONCE(slot->addr, WPROBE_DEFAULT_CLEAR_ADDRESS);
+				slot->expires = 0;
 				changed = true;
 			}
 		} else {
@@ -1101,6 +1218,7 @@ static void wprobe_trigger(struct event_trigger_data *data,
 				if (slot->addr == WPROBE_DEFAULT_CLEAR_ADDRESS)
 					continue;
 				WRITE_ONCE(slot->addr, WPROBE_DEFAULT_CLEAR_ADDRESS);
+				slot->expires = 0;
 				changed = true;
 			}
 		}
@@ -1122,6 +1240,58 @@ out:
 	raw_spin_unlock_irqrestore(&tw->lock, flags);
 }
 
+/* Bookkeeping for a set trigger that is now registered on its event. */
+static void wprobe_set_trigger_added(struct trace_wprobe *tw,
+				     struct wprobe_trigger_data *wprobe_data)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&tw->lock, flags);
+	tw->nr_set++;
+	raw_spin_unlock_irqrestore(&tw->lock, flags);
+	wprobe_data->registered = true;
+	if (wprobe_data->timeout)
+		wprobe_timeout_get(tw, wprobe_data->timeout);
+}
+
+/*
+ * A registered set trigger goes away. Nothing can close a window any more
+ * once the last one is gone, so the last one takes the windows with it.
+ */
+static void wprobe_set_trigger_removed(struct trace_wprobe *tw,
+				       struct wprobe_trigger_data *wprobe_data)
+{
+	bool changed = false;
+	unsigned long flags;
+	unsigned int i;
+
+	raw_spin_lock_irqsave(&tw->lock, flags);
+	tw->nr_set--;
+	for (i = 0; i < tw->nr_slots; i++) {
+		struct wprobe_slot *slot = &tw->slots[i];
+
+		/* The file may go away with the trigger. */
+		if (slot->file == wprobe_data->file)
+			slot->file = NULL;
+		if (tw->nr_set || slot->addr == WPROBE_DEFAULT_CLEAR_ADDRESS)
+			continue;
+		WRITE_ONCE(slot->addr, WPROBE_DEFAULT_CLEAR_ADDRESS);
+		slot->expires = 0;
+		changed = true;
+	}
+	if (changed) {
+		wprobe_update_local_cpu(tw);
+		wprobe_update_remote_cpus(tw, false);
+	}
+	if (!tw->nr_set)
+		set_bit(EVENT_FILE_FL_SOFT_DISABLED_BIT, &wprobe_data->file->flags);
+	raw_spin_unlock_irqrestore(&tw->lock, flags);
+
+	if (wprobe_data->timeout)
+		wprobe_timeout_put(tw);
+}
+
+/* Deferred (trigger_data_free()): the event may be gone, only free memory. */
 static void free_wprobe_trigger_data(struct wprobe_trigger_data *wprobe_data)
 {
 	if (wprobe_data) {
@@ -1143,6 +1313,7 @@ static int wprobe_trigger_print(struct seq_file *m,
 	struct trace_wprobe *tw = wprobe_data->tw;
 	int suppressed = atomic_read(&tw->ipi_suppressed);
 	int evicted = atomic_read(&tw->evicted);
+	int expired = atomic_read(&tw->expired);
 	int missed = atomic_read(&tw->missed);
 
 	if (wprobe_data->clear) {
@@ -1156,6 +1327,9 @@ static int wprobe_trigger_print(struct seq_file *m,
 		seq_printf(m, "%s:%s:%s%+ld", SET_WPROBE_STR,
 			   trace_event_name(wprobe_data->file->event_call),
 			   wprobe_data->field, wprobe_data->adjust);
+		if (wprobe_data->timeout)
+			seq_printf(m, ":timeout=%ums",
+				   jiffies_to_msecs(wprobe_data->timeout));
 	}
 
 	if (data->count == -1)
@@ -1166,7 +1340,7 @@ static int wprobe_trigger_print(struct seq_file *m,
 	if (data->filter_str)
 		seq_printf(m, " if %s", data->filter_str);
 
-	if (tw->max_slots > 1 || missed || suppressed || evicted)
+	if (tw->max_slots > 1 || missed || suppressed || evicted || expired)
 		seq_puts(m, " #");
 	if (tw->max_slots > 1)
 		seq_printf(m, " slots: %u/%u", READ_ONCE(tw->nr_slots), tw->max_slots);
@@ -1176,6 +1350,8 @@ static int wprobe_trigger_print(struct seq_file *m,
 		seq_printf(m, " ipi_suppressed: %d", suppressed);
 	if (evicted)
 		seq_printf(m, " evicted: %d", evicted);
+	if (expired)
+		seq_printf(m, " expired: %d", expired);
 
 	seq_putc(m, '\n');
 
@@ -1208,6 +1384,9 @@ static void wprobe_trigger_free(struct event_trigger_data *data)
 
 	data->ref--;
 	if (!data->ref) {
+		/* While the trigger's reference keeps the event alive. */
+		if (wprobe_data->registered && !wprobe_data->clear)
+			wprobe_set_trigger_removed(wprobe_data->tw, wprobe_data);
 		/* Remove the SOFT_MODE flag */
 		trace_event_enable_disable(wprobe_data->file, 0, 1);
 		trace_event_put_ref(wprobe_data->file->event_call);
@@ -1422,6 +1601,30 @@ static int wprobe_trigger_field_parse(char *field_str, struct trace_event_file *
 	return 0;
 }
 
+/* TIME is a number of milliseconds, or of seconds with an "s" suffix. */
+static int wprobe_trigger_timeout_parse(const char *str, unsigned long *timeout)
+{
+	size_t len = strspn(str, "0123456789");
+	unsigned long ms;
+	char buf[16];
+
+	if (!len || len >= sizeof(buf))
+		return -EINVAL;
+	memcpy(buf, str, len);
+	buf[len] = '\0';
+	if (kstrtoul(buf, 10, &ms) || !ms)
+		return -EINVAL;
+
+	str += len;
+	if (!strcmp(str, "s"))
+		ms *= MSEC_PER_SEC;
+	else if (*str && strcmp(str, "ms"))
+		return -EINVAL;
+
+	*timeout = msecs_to_jiffies(ms);
+	return 0;
+}
+
 static int wprobe_trigger_cmd_parse(struct event_command *cmd_ops,
 				    struct trace_event_file *file,
 				    char *glob, char *cmd,
@@ -1506,6 +1709,19 @@ static int wprobe_trigger_cmd_parse(struct event_command *cmd_ops,
 		ret = wprobe_trigger_field_parse(field_str, file, wprobe_data, glob);
 		if (ret < 0)
 			goto out_free;
+		if (param && !strncmp(param, "timeout=", 8)) {
+			char *tstr = strsep(&param, ":") + 8;
+
+			if (wprobe_trigger_timeout_parse(tstr, &wprobe_data->timeout)) {
+				wprobe_trigger_log_err(file, glob, tstr - glob, WPROBE_BAD_TIMEOUT);
+				ret = -EINVAL;
+				goto out_free;
+			}
+		}
+	} else if (param && !strncmp(param, "timeout=", 8)) {
+		wprobe_trigger_log_err(file, glob, param - glob, WPROBE_TIMEOUT_ON_CLEAR);
+		ret = -EINVAL;
+		goto out_free;
 	} else if (param && (isalpha(param[0]) || param[0] == '_' || param[0] == '(')) {
 		if (strncmp(param, "count=", 6) != 0 &&
 		    strncmp(param, "unlimited", 9) != 0) {
@@ -1612,6 +1828,7 @@ static int wprobe_register_trigger(char *glob,
 				   struct event_trigger_data *data,
 				   struct trace_event_file *file)
 {
+	struct wprobe_trigger_data *wprobe_data = data->private_data;
 	int ret = 0;
 
 	lockdep_assert_held(&event_mutex);
@@ -1635,8 +1852,12 @@ static int wprobe_register_trigger(char *glob,
 		update_cond_flag(file);
 		if (data->cmd_ops->free)
 			data->cmd_ops->free(data);
+		return ret;
 	}
-	return ret;
+
+	if (!wprobe_data->clear)
+		wprobe_set_trigger_added(wprobe_data->tw, wprobe_data);
+	return 0;
 }
 
 static void wprobe_unregister_trigger(char *glob,

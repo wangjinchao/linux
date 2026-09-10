@@ -24,6 +24,9 @@ check_error 'set_wprobe:^non_exist_wprobe:dfd'	# WPROBE_NOT_FOUND
 check_error 'set_wprobe:^'				# WPROBE_NOT_FOUND
 check_error 'set_wprobe:watch^'				# WPROBE_NEED_FIELD
 check_error 'set_wprobe:watch:^non_exist_field'	# NO_EVENT_FIELD
+check_error 'set_wprobe:watch:dfd:timeout=^0'		# WPROBE_BAD_TIMEOUT
+check_error 'set_wprobe:watch:dfd:timeout=^10x'	# WPROBE_BAD_TIMEOUT
+check_error 'clear_wprobe:watch:^timeout=10'		# WPROBE_TIMEOUT_ON_CLEAR
 
 # Enable target wprobe event and test WPROBE_BUSY error
 echo 1 > events/wprobes/watch/enable

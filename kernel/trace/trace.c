@@ -4367,7 +4367,7 @@ static const char readme_msg[] =
 	"\t            enable_event:<system>:<event>\n"
 	"\t            disable_event:<system>:<event>\n"
 #ifdef CONFIG_WPROBE_TRIGGERS
-	"\t            set_wprobe:<wprobe-event>:<field>[+|-<offset>]\n"
+	"\t            set_wprobe:<wprobe-event>:<field>[+|-<offset>][:timeout=<time>]\n"
 	"\t            clear_wprobe:<wprobe-event>[:<field>[+|-<offset>]]\n"
 #endif
 #ifdef CONFIG_HIST_TRIGGERS
