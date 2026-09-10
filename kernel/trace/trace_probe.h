@@ -640,7 +640,8 @@ extern int traceprobe_define_arg_fields(struct trace_event_call *event_call,
 	C(TYPECAST_REQ_FIELD,	"Typecast requires a field access"),	\
 	C(TYPECAST_SYM_OFFSET,	"@SYM+/-OFFSET with typecast needs parentheses"),	\
 	C(USED_ARG_NAME,	"This argument name is already used"),		\
-	C(WPROBE_NO_MAXACT,	"Watchpoint probe does not support maxactive"),	\
+	C(WPROBE_BAD_SLOTS,	"Invalid number of watch slots"),		\
+	C(WPROBE_TOO_MANY_SLOTS, "More watch slots than debug registers"),	\
 	C(WPROBE_NO_SIBLING,	"Watchpoint probe does not support sibling probes"), \
 	C(WPROBE_ON_KPROBE,	"Wprobe trigger is not supported on kprobe event"), \
 	C(WPROBE_NOT_FOUND,	"Target wprobe event is not found"),		\

@@ -20,8 +20,12 @@ Synopsis of wprobe-events
 -------------------------
 ::
 
-  w:[GRP/][EVENT] SPEC [FETCHARGS]                       : Probe on data access
+  w[SLOTS][:[GRP/][EVENT]] SPEC [FETCHARGS]              : Probe on data access
 
+ SLOTS          : Number of hardware watchpoints of the event, 1 if omitted.
+                  More than one is only useful with the set_wprobe trigger,
+                  which can then watch that many objects at the same time
+                  (see below).
  GRP            : Group name for wprobe. If omitted, use "wprobes" for it.
  EVENT          : Event name for wprobe. If omitted, an event name is
                   generated based on the address or symbol.
@@ -108,22 +112,33 @@ If COUNT is specified, it will set/clear WPEVENT only if it hits COUNT
 times.
 
 Notes:
-- set_wprobe only works on the wprobe which is NOT set a valid address yet,
-  and it must be enabled after the trigger is set.
-- clear_wprobe only works on the wprobe which is set a valid address, and it
-  will be soft-disabled after the trigger is cleared.
-- Therefore, if a trigger sets/clears a wprobe, other/same trigger events
-  will not work (on the same event) while the wprobe is set.
+- set_wprobe watches the FIELD[+|-ADJUST] address with one of the SLOTS
+  hardware watchpoints of WPEVENT. An address which is already watched is
+  left alone (a nested or concurrent window on the same object needs no
+  second watchpoint). When all the watchpoints are busy, the one armed the
+  longest ago is re-used for the new address and the ``evicted`` counter
+  is incremented.
+- clear_wprobe with FIELD stops watching that address only; without FIELD
+  it stops watching all the addresses. WPEVENT is soft-disabled while
+  nothing is watched.
+- WPEVENT must be disabled when a set_wprobe trigger is added; the trigger
+  (soft-)enables it. Enabling reserves the hardware watchpoints, which are
+  shared with the other users of the debug registers (perf, ptrace, kgdb),
+  so fewer than SLOTS may be available: the event is enabled with what
+  could be reserved, at least one, and the trigger file shows
+  ``slots: available/requested``.
 
-The trigger file shows two counters as a trailing comment when they are
-not zero. ``missed`` counts the trigger invocations that could not update
-the watchpoint: NMI context, an address which is not a naturally aligned
-kernel address, or a failed debug register update. ``ipi_suppressed``
-counts the set_wprobe invocations whose update was rate limited: the CPU
-running the trigger always watches the new address at once, but the other
-CPUs are told at most once per millisecond per source CPU, and keep watching the
-previous address in between, so a writer running there may be missed.
-Clearing is never rate limited.
+The trigger file shows the counters below as a trailing comment when they
+are not zero. ``missed`` counts the trigger invocations that could not
+update a watchpoint: NMI context, an address which is not a naturally
+aligned kernel address, or a failed debug register update.
+``ipi_suppressed`` counts the set_wprobe invocations whose update was rate
+limited: the CPU running the trigger always watches the new address at
+once, but the other CPUs are told at most once per millisecond per
+source CPU, and keep watching the previous addresses in between, so a
+writer running there may be missed. Clearing, including the eviction of
+a window, is never rate limited. ``evicted`` counts the windows closed
+early to make room for a new one.
 
 The set_wprobe trigger does not change the type and length, these
 must be set when creating a new wprobe.

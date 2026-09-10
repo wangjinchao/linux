@@ -4310,7 +4310,7 @@ static const char readme_msg[] =
 	"\t           t[:[<group>/][<event>]] <tracepoint> [<args>]\n"
 #endif
 #ifdef CONFIG_WPROBE_EVENTS
-	"\t           w[:[<group>/][<event>]] [r|w|rw]@<addr>[:<len>] [<args>]\n"
+	"\t           w[<slots>][:[<group>/][<event>]] [r|w|rw]@<addr>[:<len>] [<args>]\n"
 #endif
 #ifdef CONFIG_HIST_TRIGGERS
 	"\t           s:[synthetic/]<event> <field> [<field>]\n"

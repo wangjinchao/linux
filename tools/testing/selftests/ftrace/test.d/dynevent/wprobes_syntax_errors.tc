@@ -1,14 +1,16 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
 # description: Watch probe event parser error log check
-# requires: dynamic_events "w[:[<group>/][<event>]] [r|w|rw]@<addr>[:<len>]":README
+# requires: dynamic_events "w[<slots>][:[<group>/][<event>]] [r|w|rw]@<addr>[:<len>]":README
 
 check_error() { # command-with-error-pos-by-^
     ftrace_errlog_check 'wprobe' "$1" 'dynamic_events'
 }
 
 check_error '^w'			# NO_ARG_BODY
-check_error 'w^10 w@jiffies'		# WPROBE_NO_MAXACT
+check_error 'w^0 w@jiffies'		# WPROBE_BAD_SLOTS
+check_error 'w^x w@jiffies'		# WPROBE_BAD_SLOTS
+check_error 'w^999 w@jiffies'		# WPROBE_TOO_MANY_SLOTS
 check_error 'w ^symbol'			# BAD_ACCESS_FMT
 check_error 'w ^a@symbol'		# BAD_ACCESS_TYPE
 check_error 'w w@^symbol'		# BAD_ACCESS_ADDR

@@ -8,6 +8,7 @@
 
 #include <linux/atomic.h>
 #include <linux/compiler.h>
+#include <linux/ctype.h>
 #include <linux/errno.h>
 #include <linux/hw_breakpoint.h>
 #include <linux/kallsyms.h>
@@ -53,7 +54,7 @@ static struct dyn_event_operations trace_wprobe_ops = {
 
 struct trace_wprobe;
 
-/* Per-CPU request to re-point that CPU's breakpoint to the current address. */
+/* Per-CPU request to re-point that CPU's breakpoints to the current addresses. */
 struct wprobe_cpu_update {
 	struct irq_work		work;
 	struct trace_wprobe	*tw;
@@ -61,10 +62,21 @@ struct wprobe_cpu_update {
 	u64			last_arm_ipi;
 };
 
+/* One hardware watchpoint of the event, installed on every CPU. */
+struct wprobe_slot {
+	struct trace_wprobe	*tw;
+	struct perf_event * __percpu *bp_event;
+	unsigned long		addr;
+	/* When a trigger armed it, for eviction. */
+	u64			armed_at;
+};
+
 struct trace_wprobe {
 	struct dyn_event	devent;
-	struct perf_event * __percpu *bp_event;
 	struct wprobe_cpu_update __percpu *update;
+	struct wprobe_slot	*slots;
+	unsigned int		max_slots;	/* as requested */
+	unsigned int		nr_slots;	/* registered, 0 while disabled */
 	unsigned long		addr;
 	int			offset;
 	int			len;
@@ -73,6 +85,7 @@ struct trace_wprobe {
 	raw_spinlock_t		lock;
 	atomic_t		missed;
 	atomic_t		ipi_suppressed;
+	atomic_t		evicted;
 	struct trace_probe	tp;
 };
 
@@ -159,9 +172,6 @@ static void wprobe_trace_handler(struct trace_wprobe *tw,
 	if (trace_trigger_soft_disabled(trace_file))
 		return;
 
-	if (READ_ONCE(tw->addr) != addr)
-		return;
-
 	dsize = __get_data_size(&tw->tp, (void *)addr, NULL);
 
 	entry = trace_event_buffer_reserve(&fbuffer, trace_file,
@@ -180,15 +190,20 @@ static void wprobe_perf_handler(struct perf_event *bp,
 			      struct perf_sample_data *data,
 			      struct pt_regs *regs)
 {
-	struct trace_wprobe *tw = bp->overflow_handler_context;
+	struct wprobe_slot *slot = bp->overflow_handler_context;
+	struct trace_wprobe *tw = slot->tw;
 	struct event_file_link *link;
 	unsigned long addr = bp->attr.bp_addr;
+
+	/* This CPU has not caught up with a trigger yet. */
+	if (READ_ONCE(slot->addr) != addr)
+		return;
 
 	trace_probe_for_each_link_rcu(link, &tw->tp)
 		wprobe_trace_handler(tw, addr, regs, link->file);
 }
 
-/* Wait for the update requests in flight, they may still use tw->bp_event. */
+/* Wait for the update requests in flight, they may still use the slots. */
 static void wprobe_sync_updates(struct trace_wprobe *tw)
 {
 	int cpu;
@@ -202,9 +217,10 @@ static int __register_trace_wprobe(struct trace_wprobe *tw)
 	struct perf_event * __percpu *bp_event;
 	struct perf_event_attr attr;
 	unsigned long flags;
-	int i, ret;
+	unsigned int i;
+	int ret;
 
-	if (tw->bp_event)
+	if (tw->nr_slots)
 		return -EINVAL;
 
 	for (i = 0; i < tw->tp.nr_args; i++) {
@@ -214,17 +230,34 @@ static int __register_trace_wprobe(struct trace_wprobe *tw)
 	}
 
 	hw_breakpoint_init(&attr);
-	attr.bp_addr = tw->addr;
 	attr.bp_len = tw->len;
 	attr.bp_type = tw->type;
 
-	bp_event = register_wide_hw_breakpoint(&attr, wprobe_perf_handler, tw);
-	if (IS_ERR_PCPU(bp_event))
-		return PTR_ERR_PCPU(bp_event);
+	/*
+	 * Best effort: the debug registers are shared with the other users of
+	 * hardware breakpoints, so take what is available up to the request.
+	 */
+	for (i = 0; i < tw->max_slots; i++) {
+		struct wprobe_slot *slot = &tw->slots[i];
 
-	/* The trigger re-points the local CPU under tw->lock, publish it there. */
+		slot->addr = tw->addr;
+		slot->armed_at = 0;
+		attr.bp_addr = slot->addr;
+		bp_event = register_wide_hw_breakpoint(&attr, wprobe_perf_handler, slot);
+		if (IS_ERR_PCPU(bp_event)) {
+			if (i)
+				break;
+			return PTR_ERR_PCPU(bp_event);
+		}
+		slot->bp_event = bp_event;
+	}
+	if (i < tw->max_slots)
+		pr_info("%s: %u of %u watch slots available\n",
+			trace_probe_name(&tw->tp), i, tw->max_slots);
+
+	/* The trigger uses the slots under tw->lock, publish them there. */
 	raw_spin_lock_irqsave(&tw->lock, flags);
-	tw->bp_event = bp_event;
+	tw->nr_slots = i;
 	raw_spin_unlock_irqrestore(&tw->lock, flags);
 
 	return 0;
@@ -232,46 +265,53 @@ static int __register_trace_wprobe(struct trace_wprobe *tw)
 
 static void __unregister_trace_wprobe(struct trace_wprobe *tw)
 {
-	struct perf_event * __percpu *bp_event;
 	unsigned long flags;
+	unsigned int i, nr;
 
-	/* Retract it first so that no trigger touches a dying breakpoint. */
+	/* Retract them first so that no trigger touches a dying breakpoint. */
 	raw_spin_lock_irqsave(&tw->lock, flags);
-	bp_event = tw->bp_event;
-	tw->bp_event = NULL;
+	nr = tw->nr_slots;
+	tw->nr_slots = 0;
 	raw_spin_unlock_irqrestore(&tw->lock, flags);
 
-	if (!bp_event)
+	if (!nr)
 		return;
 
 	wprobe_sync_updates(tw);
-	unregister_wide_hw_breakpoint(bp_event);
+	for (i = 0; i < nr; i++) {
+		unregister_wide_hw_breakpoint(tw->slots[i].bp_event);
+		tw->slots[i].bp_event = NULL;
+	}
 }
 
-static int trace_wprobe_update_local(struct trace_wprobe *tw, unsigned long addr)
+/* Re-point this CPU's breakpoints to the current addresses of the slots. */
+static void wprobe_update_local_cpu(struct trace_wprobe *tw)
 {
-	struct perf_event * __percpu *pevent;
-	struct perf_event *bp;
+	unsigned int i, nr = READ_ONCE(tw->nr_slots);
 
-	pevent = READ_ONCE(tw->bp_event);
-	if (!pevent)
-		return -EINVAL;
+	for (i = 0; i < nr; i++) {
+		struct wprobe_slot *slot = &tw->slots[i];
+		struct perf_event * __percpu *bp_event = READ_ONCE(slot->bp_event);
+		unsigned long addr = READ_ONCE(slot->addr);
+		struct perf_event *bp;
 
-	bp = *this_cpu_ptr(pevent);
-	if (!bp)
-		return -EINVAL;
-
-	return modify_local_hw_breakpoint_addr(bp, addr);
+		if (!bp_event)
+			continue;
+		bp = *this_cpu_ptr(bp_event);
+		/* bp->attr.bp_addr is what this CPU watches right now. */
+		if (!bp || READ_ONCE(bp->attr.bp_addr) == addr)
+			continue;
+		if (modify_local_hw_breakpoint_addr(bp, addr))
+			atomic_inc(&tw->missed);
+	}
 }
 
 /* Runs on a CPU asked to catch up, in hard interrupt context. */
 static void wprobe_update_work_func(struct irq_work *work)
 {
 	struct wprobe_cpu_update *update = container_of(work, struct wprobe_cpu_update, work);
-	struct trace_wprobe *tw = update->tw;
 
-	if (trace_wprobe_update_local(tw, READ_ONCE(tw->addr)))
-		atomic_inc(&tw->missed);
+	wprobe_update_local_cpu(update->tw);
 }
 
 static void free_trace_wprobe(struct trace_wprobe *tw)
@@ -282,6 +322,7 @@ static void free_trace_wprobe(struct trace_wprobe *tw)
 			free_percpu(tw->update);
 		}
 		trace_probe_cleanup(&tw->tp);
+		kfree(tw->slots);
 		kfree(tw->symbol);
 		kfree(tw);
 	}
@@ -296,9 +337,11 @@ static struct trace_wprobe *alloc_trace_wprobe(const char *group,
 					       const char *symbol,
 					       int offset,
 					       unsigned long addr,
-					       int len, int type, int nargs)
+					       int len, int type,
+					       unsigned int max_slots, int nargs)
 {
 	struct trace_wprobe *tw __free(free_trace_wprobe) = NULL;
+	unsigned int i;
 	int ret, cpu;
 
 	tw = kzalloc_flex(*tw, tp.args, nargs);
@@ -308,6 +351,7 @@ static struct trace_wprobe *alloc_trace_wprobe(const char *group,
 	raw_spin_lock_init(&tw->lock);
 	atomic_set(&tw->missed, 0);
 	atomic_set(&tw->ipi_suppressed, 0);
+	atomic_set(&tw->evicted, 0);
 
 	tw->update = alloc_percpu(struct wprobe_cpu_update);
 	if (!tw->update)
@@ -318,6 +362,13 @@ static struct trace_wprobe *alloc_trace_wprobe(const char *group,
 		update->work = IRQ_WORK_INIT_HARD(wprobe_update_work_func);
 		update->tw = tw;
 	}
+
+	tw->max_slots = max_slots;
+	tw->slots = kcalloc(max_slots, sizeof(*tw->slots), GFP_KERNEL);
+	if (!tw->slots)
+		return ERR_PTR(-ENOMEM);
+	for (i = 0; i < max_slots; i++)
+		tw->slots[i].tw = tw;
 
 	if (symbol) {
 		tw->symbol = kstrdup(symbol, GFP_KERNEL);
@@ -708,7 +759,7 @@ static int __trace_wprobe_create(int argc, const char *argv[])
 {
 	/*
 	 * Argument syntax:
-	 *  w[:[GRP/][EVENT]] SPEC
+	 *  w[SLOTS][:[GRP/][EVENT]] SPEC
 	 *
 	 * SPEC:
 	 *  [r|w|rw]@[ADDR|SYMBOL[+OFFS]][:LEN]
@@ -720,6 +771,8 @@ static int __trace_wprobe_create(int argc, const char *argv[])
 	char *symbol __free(kfree) = NULL;
 	char *gbuf __free(kfree) = NULL;
 	char *ebuf __free(kfree) = NULL;
+	char *nbuf __free(kfree) = NULL;
+	unsigned int max_slots = 1;
 	unsigned long addr;
 	int len, type, offset, i;
 	int ret;
@@ -736,12 +789,26 @@ static int __trace_wprobe_create(int argc, const char *argv[])
 	}
 
 	if (argv[0][1] != '\0') {
+		event = strchr(&argv[0][1], ':');
+		if (event)
+			event++;
+		/* wN: the number of hardware watchpoints, see the triggers. */
 		if (argv[0][1] != ':') {
+			const char *end = event ? event - 1 : argv[0] + strlen(argv[0]);
+
 			trace_probe_log_set_index(0);
-			trace_probe_log_err(1, WPROBE_NO_MAXACT);
-			return -EINVAL;
+			nbuf = kmemdup_nul(&argv[0][1], end - &argv[0][1], GFP_KERNEL);
+			if (!nbuf)
+				return -ENOMEM;
+			if (kstrtouint(nbuf, 0, &max_slots) || !max_slots) {
+				trace_probe_log_err(1, WPROBE_BAD_SLOTS);
+				return -EINVAL;
+			}
+			if (max_slots > hw_breakpoint_slots(TYPE_DATA)) {
+				trace_probe_log_err(1, WPROBE_TOO_MANY_SLOTS);
+				return -EINVAL;
+			}
 		}
-		event = &argv[0][2];
 	}
 
 	trace_probe_log_set_index(1);
@@ -779,7 +846,8 @@ static int __trace_wprobe_create(int argc, const char *argv[])
 		trace_probe_log_err(0, TOO_MANY_ARGS);
 		return -E2BIG;
 	}
-	tw = alloc_trace_wprobe(group, event, symbol, offset, addr, len, type, argc);
+	tw = alloc_trace_wprobe(group, event, symbol, offset, addr, len, type,
+				max_slots, argc);
 	if (IS_ERR(tw))
 		return PTR_ERR(tw);
 
@@ -830,7 +898,11 @@ static int trace_wprobe_show(struct seq_file *m, struct dyn_event *ev)
 	const char *type_str;
 	int i, len;
 
-	seq_printf(m, "w:%s/%s", trace_probe_group_name(&tw->tp),
+	if (tw->max_slots > 1)
+		seq_printf(m, "w%u", tw->max_slots);
+	else
+		seq_putc(m, 'w');
+	seq_printf(m, ":%s/%s", trace_probe_group_name(&tw->tp),
 		   trace_probe_name(&tw->tp));
 
 	if (tw->type == HW_BREAKPOINT_R)
@@ -898,13 +970,14 @@ struct wprobe_trigger_data {
 #define WPROBE_ARM_IPI_MIN_NS	1000000ULL
 
 /*
- * Ask the other CPUs to re-point their breakpoint to tw->addr. Called with
- * interrupts disabled, so no CPU can complete going offline meanwhile.
+ * Ask the other CPUs to re-point their breakpoints to the slots' addresses.
+ * Called with interrupts disabled, so no CPU can complete going offline
+ * meanwhile.
  *
  * No bookkeeping is needed for requests already in flight: a request that
- * is still pending reads the address when it runs, and one queued while its
- * function executes runs it again (irq_work_single() clears the pending bit
- * before the call), so every CPU ends up on the latest address.
+ * is still pending reads the addresses when it runs, and one queued while
+ * its function executes runs it again (irq_work_single() clears the pending
+ * bit before the call), so every CPU ends up on the latest addresses.
  *
  * Arming broadcasts are rate limited per source CPU so that a hot window
  * cannot storm the other CPUs with IPIs. While a broadcast is suppressed the
@@ -933,14 +1006,51 @@ static void wprobe_update_remote_cpus(struct trace_wprobe *tw, bool arm)
 	}
 }
 
+/* The slot helpers are called with tw->lock held. */
+static struct wprobe_slot *wprobe_find_slot(struct trace_wprobe *tw, unsigned long addr)
+{
+	unsigned int i;
+
+	for (i = 0; i < tw->nr_slots; i++) {
+		if (tw->slots[i].addr == addr)
+			return &tw->slots[i];
+	}
+	return NULL;
+}
+
+static struct wprobe_slot *wprobe_oldest_slot(struct trace_wprobe *tw)
+{
+	struct wprobe_slot *oldest = &tw->slots[0];
+	unsigned int i;
+
+	for (i = 1; i < tw->nr_slots; i++) {
+		if (tw->slots[i].armed_at < oldest->armed_at)
+			oldest = &tw->slots[i];
+	}
+	return oldest;
+}
+
+static bool wprobe_is_armed(struct trace_wprobe *tw)
+{
+	unsigned int i;
+
+	for (i = 0; i < tw->nr_slots; i++) {
+		if (tw->slots[i].addr != WPROBE_DEFAULT_CLEAR_ADDRESS)
+			return true;
+	}
+	return false;
+}
+
 static void wprobe_trigger(struct event_trigger_data *data,
 			   struct trace_buffer *buffer,  void *rec,
 			   struct ring_buffer_event *event)
 {
 	struct wprobe_trigger_data *wprobe_data = data->private_data;
 	struct trace_wprobe *tw = wprobe_data->tw;
+	bool changed = false, evicted = false;
 	unsigned long addr = 0, flags;
-	bool changed = false;
+	struct wprobe_slot *slot;
+	unsigned int i;
 
 	if (in_nmi()) {
 		atomic_inc(&tw->missed);
@@ -954,34 +1064,58 @@ static void wprobe_trigger(struct event_trigger_data *data,
 
 	raw_spin_lock_irqsave(&tw->lock, flags);
 
+	/* Not enabled: no hardware to program. */
+	if (!tw->nr_slots)
+		goto out;
+
 	if (!wprobe_data->clear) {
 		if (!trace_wprobe_is_valid_addr(addr, tw->len)) {
 			atomic_inc(&tw->missed);
 			goto out;
 		}
-		if (tw->addr == WPROBE_DEFAULT_CLEAR_ADDRESS) {
-			WRITE_ONCE(tw->addr, addr);
-			changed = true;
-			clear_bit(EVENT_FILE_FL_SOFT_DISABLED_BIT, &wprobe_data->file->flags);
+		/* Already watched: a nested or concurrent window on the object. */
+		if (wprobe_find_slot(tw, addr))
+			goto out;
+		slot = wprobe_find_slot(tw, WPROBE_DEFAULT_CLEAR_ADDRESS);
+		if (!slot) {
+			/* All slots busy: the oldest window makes room. */
+			slot = wprobe_oldest_slot(tw);
+			atomic_inc(&tw->evicted);
+			evicted = true;
 		}
+		WRITE_ONCE(slot->addr, addr);
+		slot->armed_at = local_clock();
+		changed = true;
+		clear_bit(EVENT_FILE_FL_SOFT_DISABLED_BIT, &wprobe_data->file->flags);
 	} else {
-		if (tw->addr != WPROBE_DEFAULT_CLEAR_ADDRESS) {
-			if (!wprobe_data->field || tw->addr == addr) {
-				WRITE_ONCE(tw->addr, WPROBE_DEFAULT_CLEAR_ADDRESS);
+		if (wprobe_data->field) {
+			slot = wprobe_find_slot(tw, addr);
+			if (slot) {
+				WRITE_ONCE(slot->addr, WPROBE_DEFAULT_CLEAR_ADDRESS);
 				changed = true;
-				set_bit(EVENT_FILE_FL_SOFT_DISABLED_BIT, &wprobe_data->file->flags);
+			}
+		} else {
+			/* No field: forcibly close every window. */
+			for (i = 0; i < tw->nr_slots; i++) {
+				slot = &tw->slots[i];
+				if (slot->addr == WPROBE_DEFAULT_CLEAR_ADDRESS)
+					continue;
+				WRITE_ONCE(slot->addr, WPROBE_DEFAULT_CLEAR_ADDRESS);
+				changed = true;
 			}
 		}
+		if (changed && !wprobe_is_armed(tw))
+			set_bit(EVENT_FILE_FL_SOFT_DISABLED_BIT, &wprobe_data->file->flags);
 	}
 
-	if (changed && tw->bp_event) {
+	if (changed) {
 		/*
 		 * The window opens or closes on this CPU first: re-point the
-		 * local breakpoint right away, then ask the others.
+		 * local breakpoints right away, then ask the others.
 		 */
-		if (trace_wprobe_update_local(tw, tw->addr))
-			atomic_inc(&tw->missed);
-		wprobe_update_remote_cpus(tw, tw->addr != WPROBE_DEFAULT_CLEAR_ADDRESS);
+		wprobe_update_local_cpu(tw);
+		/* Evicting retires an address too: never hold that back. */
+		wprobe_update_remote_cpus(tw, !wprobe_data->clear && !evicted);
 	}
 
 out:
@@ -1006,8 +1140,10 @@ static int wprobe_trigger_print(struct seq_file *m,
 			       struct event_trigger_data *data)
 {
 	struct wprobe_trigger_data *wprobe_data = data->private_data;
-	int suppressed = atomic_read(&wprobe_data->tw->ipi_suppressed);
-	int missed = atomic_read(&wprobe_data->tw->missed);
+	struct trace_wprobe *tw = wprobe_data->tw;
+	int suppressed = atomic_read(&tw->ipi_suppressed);
+	int evicted = atomic_read(&tw->evicted);
+	int missed = atomic_read(&tw->missed);
 
 	if (wprobe_data->clear) {
 		seq_printf(m, "%s:%s", CLEAR_WPROBE_STR,
@@ -1030,12 +1166,16 @@ static int wprobe_trigger_print(struct seq_file *m,
 	if (data->filter_str)
 		seq_printf(m, " if %s", data->filter_str);
 
-	if (missed || suppressed)
+	if (tw->max_slots > 1 || missed || suppressed || evicted)
 		seq_puts(m, " #");
+	if (tw->max_slots > 1)
+		seq_printf(m, " slots: %u/%u", READ_ONCE(tw->nr_slots), tw->max_slots);
 	if (missed)
 		seq_printf(m, " missed: %d", missed);
 	if (suppressed)
 		seq_printf(m, " ipi_suppressed: %d", suppressed);
+	if (evicted)
+		seq_printf(m, " evicted: %d", evicted);
 
 	seq_putc(m, '\n');
 
