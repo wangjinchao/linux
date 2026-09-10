@@ -115,6 +115,16 @@ Notes:
 - Therefore, if a trigger sets/clears a wprobe, other/same trigger events
   will not work (on the same event) while the wprobe is set.
 
+The trigger file shows two counters as a trailing comment when they are
+not zero. ``missed`` counts the trigger invocations that could not update
+the watchpoint: NMI context, an address which is not a naturally aligned
+kernel address, or a failed debug register update. ``ipi_suppressed``
+counts the set_wprobe invocations whose update was rate limited: the CPU
+running the trigger always watches the new address at once, but the other
+CPUs are told at most once per millisecond per source CPU, and keep watching the
+previous address in between, so a writer running there may be missed.
+Clearing is never rate limited.
+
 The set_wprobe trigger does not change the type and length, these
 must be set when creating a new wprobe.
 

@@ -16,6 +16,7 @@
 #include <linux/mutex.h>
 #include <linux/perf_event.h>
 #include <linux/rculist.h>
+#include <linux/sched/clock.h>
 #include <linux/security.h>
 #include <linux/spinlock.h>
 #include <linux/tracepoint.h>
@@ -56,6 +57,8 @@ struct trace_wprobe;
 struct wprobe_cpu_update {
 	struct irq_work		work;
 	struct trace_wprobe	*tw;
+	/* When this CPU last broadcast an arming update. */
+	u64			last_arm_ipi;
 };
 
 struct trace_wprobe {
@@ -69,6 +72,7 @@ struct trace_wprobe {
 	const char		*symbol;
 	raw_spinlock_t		lock;
 	atomic_t		missed;
+	atomic_t		ipi_suppressed;
 	struct trace_probe	tp;
 };
 
@@ -270,25 +274,6 @@ static void wprobe_update_work_func(struct irq_work *work)
 		atomic_inc(&tw->missed);
 }
 
-/*
- * Ask the other CPUs to re-point their breakpoint to tw->addr. Called with
- * interrupts disabled, so no CPU can complete going offline meanwhile.
- *
- * No bookkeeping is needed for requests already in flight: a request that
- * is still pending reads the address when it runs, and one queued while its
- * function executes runs it again (irq_work_single() clears the pending bit
- * before the call), so every CPU ends up on the latest address.
- */
-static void wprobe_update_remote_cpus(struct trace_wprobe *tw)
-{
-	int cpu, this_cpu = smp_processor_id();
-
-	for_each_online_cpu(cpu) {
-		if (cpu != this_cpu)
-			irq_work_queue_on(&per_cpu_ptr(tw->update, cpu)->work, cpu);
-	}
-}
-
 static void free_trace_wprobe(struct trace_wprobe *tw)
 {
 	if (tw) {
@@ -322,6 +307,7 @@ static struct trace_wprobe *alloc_trace_wprobe(const char *group,
 
 	raw_spin_lock_init(&tw->lock);
 	atomic_set(&tw->missed, 0);
+	atomic_set(&tw->ipi_suppressed, 0);
 
 	tw->update = alloc_percpu(struct wprobe_cpu_update);
 	if (!tw->update)
@@ -908,6 +894,45 @@ struct wprobe_trigger_data {
 	bool			clear;
 };
 
+/* Minimum spacing between the broadcasts that arm a window, per source CPU. */
+#define WPROBE_ARM_IPI_MIN_NS	1000000ULL
+
+/*
+ * Ask the other CPUs to re-point their breakpoint to tw->addr. Called with
+ * interrupts disabled, so no CPU can complete going offline meanwhile.
+ *
+ * No bookkeeping is needed for requests already in flight: a request that
+ * is still pending reads the address when it runs, and one queued while its
+ * function executes runs it again (irq_work_single() clears the pending bit
+ * before the call), so every CPU ends up on the latest address.
+ *
+ * Arming broadcasts are rate limited per source CPU so that a hot window
+ * cannot storm the other CPUs with IPIs. While a broadcast is suppressed the
+ * other CPUs keep watching the previous address, which the user can see in
+ * the ipi_suppressed counter. Disarming is never suppressed: a stale watch
+ * would keep firing on the other CPUs.
+ */
+static void wprobe_update_remote_cpus(struct trace_wprobe *tw, bool arm)
+{
+	struct wprobe_cpu_update *update = this_cpu_ptr(tw->update);
+	int cpu, this_cpu = smp_processor_id();
+	u64 now;
+
+	if (arm) {
+		now = local_clock();
+		if (now - update->last_arm_ipi < WPROBE_ARM_IPI_MIN_NS) {
+			atomic_inc(&tw->ipi_suppressed);
+			return;
+		}
+		update->last_arm_ipi = now;
+	}
+
+	for_each_online_cpu(cpu) {
+		if (cpu != this_cpu)
+			irq_work_queue_on(&per_cpu_ptr(tw->update, cpu)->work, cpu);
+	}
+}
+
 static void wprobe_trigger(struct event_trigger_data *data,
 			   struct trace_buffer *buffer,  void *rec,
 			   struct ring_buffer_event *event)
@@ -956,7 +981,7 @@ static void wprobe_trigger(struct event_trigger_data *data,
 		 */
 		if (trace_wprobe_update_local(tw, tw->addr))
 			atomic_inc(&tw->missed);
-		wprobe_update_remote_cpus(tw);
+		wprobe_update_remote_cpus(tw, tw->addr != WPROBE_DEFAULT_CLEAR_ADDRESS);
 	}
 
 out:
@@ -981,6 +1006,7 @@ static int wprobe_trigger_print(struct seq_file *m,
 			       struct event_trigger_data *data)
 {
 	struct wprobe_trigger_data *wprobe_data = data->private_data;
+	int suppressed = atomic_read(&wprobe_data->tw->ipi_suppressed);
 	int missed = atomic_read(&wprobe_data->tw->missed);
 
 	if (wprobe_data->clear) {
@@ -1004,8 +1030,12 @@ static int wprobe_trigger_print(struct seq_file *m,
 	if (data->filter_str)
 		seq_printf(m, " if %s", data->filter_str);
 
+	if (missed || suppressed)
+		seq_puts(m, " #");
 	if (missed)
-		seq_printf(m, " # missed: %d", missed);
+		seq_printf(m, " missed: %d", missed);
+	if (suppressed)
+		seq_printf(m, " ipi_suppressed: %d", suppressed);
 
 	seq_putc(m, '\n');
 
