@@ -187,7 +187,9 @@ static void wprobe_perf_handler(struct perf_event *bp,
 
 static int __register_trace_wprobe(struct trace_wprobe *tw)
 {
+	struct perf_event * __percpu *bp_event;
 	struct perf_event_attr attr;
+	unsigned long flags;
 	int i, ret;
 
 	if (tw->bp_event)
@@ -204,25 +206,35 @@ static int __register_trace_wprobe(struct trace_wprobe *tw)
 	attr.bp_len = tw->len;
 	attr.bp_type = tw->type;
 
-	tw->bp_event = register_wide_hw_breakpoint(&attr, wprobe_perf_handler, tw);
-	if (IS_ERR_PCPU(tw->bp_event)) {
-		int ret = PTR_ERR_PCPU(tw->bp_event);
+	bp_event = register_wide_hw_breakpoint(&attr, wprobe_perf_handler, tw);
+	if (IS_ERR_PCPU(bp_event))
+		return PTR_ERR_PCPU(bp_event);
 
-		tw->bp_event = NULL;
-		return ret;
-	}
+	/* The trigger re-points the local CPU under tw->lock, publish it there. */
+	raw_spin_lock_irqsave(&tw->lock, flags);
+	tw->bp_event = bp_event;
+	raw_spin_unlock_irqrestore(&tw->lock, flags);
 
 	return 0;
 }
 
 static void __unregister_trace_wprobe(struct trace_wprobe *tw)
 {
-	if (tw->bp_event) {
-		irq_work_sync(&tw->irq_work);
-		cancel_work_sync(&tw->work);
-		unregister_wide_hw_breakpoint(tw->bp_event);
-		tw->bp_event = NULL;
-	}
+	struct perf_event * __percpu *bp_event;
+	unsigned long flags;
+
+	/* Retract it first so that no trigger touches a dying breakpoint. */
+	raw_spin_lock_irqsave(&tw->lock, flags);
+	bp_event = tw->bp_event;
+	tw->bp_event = NULL;
+	raw_spin_unlock_irqrestore(&tw->lock, flags);
+
+	if (!bp_event)
+		return;
+
+	irq_work_sync(&tw->irq_work);
+	cancel_work_sync(&tw->work);
+	unregister_wide_hw_breakpoint(bp_event);
 }
 
 static int trace_wprobe_update_local(struct trace_wprobe *tw, unsigned long addr)
@@ -934,6 +946,12 @@ static void wprobe_trigger(struct event_trigger_data *data,
 	}
 
 	if (changed) {
+		/*
+		 * The window opens or closes on this CPU first: re-point the
+		 * local breakpoint right away, the work updates the others.
+		 */
+		if (tw->bp_event && trace_wprobe_update_local(tw, tw->addr))
+			atomic_inc(&tw->missed);
 		/*
 		 * Mark the work as pending before queuing irq_work so that
 		 * subsequent triggers skip updating tw->addr until the work
