@@ -158,6 +158,18 @@ early to make room for a new one.
 The set_wprobe trigger does not change the type and length, these
 must be set when creating a new wprobe.
 
+scripts/tracing/wprobe-scope.sh sets all of the above up in one command:
+the wprobe event, the two fprobe events, their triggers, and optionally a
+stacktrace trigger on the wprobe event to record where the access came
+from. For example, to catch whoever overwrites the completion callback of
+a USB request (offset 56) while the request is being given back to the
+gadget driver::
+
+  # scripts/tracing/wprobe-scope.sh -o 56 -S usb_gadget_giveback_request \
+        '$arg2' usb_gadget_giveback_request%return '$arg2'
+  # cat trace_pipe
+  # scripts/tracing/wprobe-scope.sh -c
+
 The WPROBE event must be disabled when setting the new trigger
 and it will be busy afterwards. Recommended usage is to add a new
 wprobe at invalid dummy address (-1) and keep disabled.
